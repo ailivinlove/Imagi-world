@@ -602,6 +602,24 @@
         // ============================================================================
         // CANONICAL ATOM REPRESENTATION
         // ============================================================================
+        const RELATION_WORDS = { 'N': 'north of', 'S': 'south of', 'E': 'east of', 'W': 'west of' };
+
+        // Hidden configuration flag: toggle to true once at startup if semicolons create
+        // unnaturally long pauses on the target speech engine.
+        const useCommaJoinerIfSemicolonsAreLong = false;
+
+        function buildPremiseString(atoms, joiner) {
+            if (!atoms || atoms.length === 0) {
+                return '';
+            }
+
+            const phrase = atoms
+                .map(atom => `${atom.head} is ${RELATION_WORDS[atom.axis]} ${atom.tail}`)
+                .join(joiner);
+
+            return `${phrase}.`;
+        }
+
         class Atom {
             constructor(axis, head, tail) {
                 this.axis = axis;
@@ -621,8 +639,7 @@
             }
             
             toString() {
-                const relMap = { 'N': 'north of', 'S': 'south of', 'E': 'east of', 'W': 'west of' };
-                return `${this.head} is ${relMap[this.axis]} ${this.tail}`;
+                return `${this.head} is ${RELATION_WORDS[this.axis]} ${this.tail}`;
             }
             
             toKey() {
@@ -666,75 +683,8 @@
             }
             
             toNaturalSpeech() {
-                const relMap = { 'N': 'north of', 'S': 'south of', 'E': 'east of', 'W': 'west of' };
-                
-                if (this.atoms.length === 1) {
-                    const a = this.atoms[0];
-                    return `${a.head} is ${relMap[a.axis]} ${a.tail}.`;
-                }
-                
-                if (this.atoms.length === 2) {
-                    const a1 = this.atoms[0];
-                    const a2 = this.atoms[1];
-                    
-                    if (a1.head === a2.head) {
-                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}, and ${relMap[a2.axis]} ${a2.tail}.`;
-                    } else {
-                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}, and ${a2.head} is ${relMap[a2.axis]} ${a2.tail}.`;
-                    }
-                }
-                
-                if (this.atoms.length === 3) {
-                    const a1 = this.atoms[0];
-                    const a2 = this.atoms[1];
-                    const a3 = this.atoms[2];
-                    
-                    const byHead = new Map();
-                    this.atoms.forEach(a => {
-                        if (!byHead.has(a.head)) byHead.set(a.head, []);
-                        byHead.get(a.head).push(a);
-                    });
-                    
-                    if (byHead.size === 1) {
-                        const head = Array.from(byHead.keys())[0];
-                        const atoms = byHead.get(head);
-                        return `${head} is ${atoms.map(a => `${relMap[a.axis]} ${a.tail}`).join(', and ')}.`;
-                    } else if (byHead.size === 2) {
-                        const heads = Array.from(byHead.keys());
-                        const parts = heads.map(head => {
-                            const atoms = byHead.get(head);
-                            if (atoms.length === 1) {
-                                return `${head} is ${relMap[atoms[0].axis]} ${atoms[0].tail}`;
-                            } else {
-                                return `${head} is ${atoms.map(a => `${relMap[a.axis]} ${a.tail}`).join(', and ')}`;
-                            }
-                        });
-                        return parts.join(', and ') + '.';
-                    } else {
-                        return this.atoms.map(a => `${a.head} is ${relMap[a.axis]} ${a.tail}`).join(', and ') + '.';
-                    }
-                }
-                
-                if (this.atoms.length === 4) {
-                    const byHead = new Map();
-                    this.atoms.forEach(a => {
-                        if (!byHead.has(a.head)) byHead.set(a.head, []);
-                        byHead.get(a.head).push(a);
-                    });
-                    
-                    const parts = [];
-                    for (const [head, atoms] of byHead) {
-                        if (atoms.length === 1) {
-                            parts.push(`${head} is ${relMap[atoms[0].axis]} ${atoms[0].tail}`);
-                        } else {
-                            parts.push(`${head} is ${atoms.map(a => `${relMap[a.axis]} ${a.tail}`).join(', and ')}`);
-                        }
-                    }
-                    
-                    return parts.join(', and ') + '.';
-                }
-                
-                return this.atoms.map(a => `${a.head} is ${relMap[a.axis]} ${a.tail}`).join(', and ') + '.';
+                const joiner = useCommaJoinerIfSemicolonsAreLong ? ', ' : '; ';
+                return buildPremiseString(this.atoms, joiner);
             }
         }
 
