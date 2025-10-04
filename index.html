@@ -56,6 +56,20 @@
             font-size: 0.95rem;
         }
 
+        .label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        .hint {
+            display: block;
+            margin-top: 4px;
+            color: #aaa;
+            font-size: 0.85rem;
+        }
+
         input[type="range"] {
             width: 100%;
             height: 8px;
@@ -404,6 +418,12 @@
                 </div>
             </div>
 
+            <div class="control-group">
+                <label for="numTrials" class="label">Number of trials (1–10000)</label>
+                <input id="numTrials" type="number" min="1" max="10000" step="1" value="20" />
+                <small id="numTrialsHelp" class="hint">Applied on Start/Restart. Stored locally.</small>
+            </div>
+
             <div class="control-group checkbox-group">
                 <input type="checkbox" id="transitivity-toggle">
                 <label for="transitivity-toggle" style="margin-bottom: 0;">Enable Advanced Transitivity</label>
@@ -500,6 +520,25 @@
         const HAMMING_WINDOW = 8;
         const NOVELTY_OVERRIDE_THRESHOLD = 30;
         const MAX_GENERATION_ATTEMPTS = 240;
+
+        const NUM_TRIALS_KEY = "numTrials";
+        const numTrialsInput = document.getElementById("numTrials");
+        numTrialsInput.value = localStorage.getItem(NUM_TRIALS_KEY) ?? "20";
+        numTrialsInput.addEventListener("change", () => {
+            const v = Math.max(1, Math.min(10000, parseInt(numTrialsInput.value || "20", 10)));
+            numTrialsInput.value = String(v);
+            localStorage.setItem(NUM_TRIALS_KEY, String(v));
+        });
+
+        const session = {
+            state: "STOPPED",
+            trialIndex: 0,
+            numTrials: Math.max(1, Math.min(10000, parseInt(numTrialsInput.value || "20", 10))),
+            seedSession: null,
+            n: parseInt(document.getElementById('n-slider').value, 10),
+            k: parseInt(document.getElementById('k-slider').value, 10),
+            secondsPerTrial: parseFloat(document.getElementById('spt-slider').value)
+        };
 
         function cryptoRandom32() {
             if (window.crypto && window.crypto.getRandomValues) {
@@ -719,6 +758,7 @@
                     if (a.head !== b.head) return a.head.localeCompare(b.head);
                     return a.tail.localeCompare(b.tail);
                 });
+                this.features = this.computeFeatures();
             }
 
             getLetters() {
@@ -728,6 +768,49 @@
                     letters.add(atom.tail);
                 });
                 return letters;
+            }
+
+            computeFeatures() {
+                const lettersSet = new Set();
+                const degreeVector = new Map();
+                const axisProfile = new Map();
+                const indexMap = {
+                    N: [0, 1],
+                    S: [2, 3],
+                    E: [4, 5],
+                    W: [6, 7]
+                };
+
+                const ensureVector = (letter) => {
+                    if (!degreeVector.has(letter)) {
+                        degreeVector.set(letter, [0, 0, 0, 0, 0, 0, 0, 0]);
+                    }
+                    return degreeVector.get(letter);
+                };
+
+                this.atoms.forEach(atom => {
+                    lettersSet.add(atom.head);
+                    lettersSet.add(atom.tail);
+
+                    const [outIdx, inIdx] = indexMap[atom.axis];
+                    const headVec = ensureVector(atom.head);
+                    headVec[outIdx] += 1;
+                    const tailVec = ensureVector(atom.tail);
+                    tailVec[inIdx] += 1;
+
+                    axisProfile.set(atom.axis, (axisProfile.get(atom.axis) || 0) + 1);
+                });
+
+                return {
+                    lettersSet,
+                    degreeVector,
+                    skeletonIsoSignature: this.isoSignature(),
+                    atomAxisProfile: axisProfile
+                };
+            }
+
+            getFeatures() {
+                return this.features;
             }
 
             atomKeys() {
@@ -1256,6 +1339,8 @@
                 this.rng = rng;
                 this.schedule = [];
                 this.flips = new Map();
+                this.matchModeBag = [];
+                this.decoyModeBag = [];
             }
 
             plan(totalTrials, n) {
@@ -1281,6 +1366,24 @@
                     if (history.length > 24) history.shift();
                 }
                 return this.schedule;
+            }
+
+            chooseConflictMode(plannedMatch) {
+                if (plannedMatch) {
+                    if (this.matchModeBag.length === 0) {
+                        this.matchModeBag = this.rng.shuffle(['BSM', 'CAC']);
+                    }
+                    return this.matchModeBag.pop();
+                }
+                if (this.decoyModeBag.length === 0) {
+                    const decoys = ['ASNM', 'APNM', 'PPHF', 'CBB', 'WLC', 'ISD'];
+                    const bag = [];
+                    for (let i = 0; i < 2; i++) {
+                        bag.push(...decoys);
+                    }
+                    this.decoyModeBag = this.rng.shuffle(bag);
+                }
+                return this.decoyModeBag.pop();
             }
 
             wouldRepeat(history, decision) {
@@ -1434,6 +1537,11 @@
                 this.state = state;
                 this.solver = solver;
                 this.equivalence = equivalence;
+                this.planner = null;
+            }
+
+            setPlanner(planner) {
+                this.planner = planner;
             }
 
             generate(options) {
@@ -1452,18 +1560,40 @@
                 let bestCandidate = null;
                 let attempts = 0;
                 let expanded = false;
+                const effectiveMatch = plannedMatch && Boolean(nBackPremise);
+                let mode = effectiveMatch ? 'BSM' : 'ASNM';
+                if (this.planner) {
+                    mode = this.planner.chooseConflictMode(effectiveMatch);
+                }
 
                 while (attempts < MAX_GENERATION_ATTEMPTS) {
                     const expand = attempts > 0 && attempts % NOVELTY_OVERRIDE_THRESHOLD === 0;
                     if (expand) expanded = true;
                     const pool = this.state.letterPool.nextPool(k, { expand });
-                    const candidateAtoms = plannedMatch
-                        ? this.buildMatchCandidate(nBackPremise, pool, k)
-                        : this.buildNovelPremise(pool, k, avoidLetters);
+                    const context = {
+                        mode,
+                        plannedMatch: effectiveMatch,
+                        nBackPremise,
+                        pool,
+                        k,
+                        n,
+                        trialIndex,
+                        middleAtoms,
+                        avoidLetters,
+                        state: this.state,
+                        rng: this.state.rng
+                    };
+                    const candidateAtoms = this.makePremiseWithMode(mode, context);
                     attempts++;
-                    if (!candidateAtoms) continue;
+                    if (!candidateAtoms) {
+                        if (attempts % 12 === 0 && this.planner) {
+                            mode = this.planner.chooseConflictMode(effectiveMatch);
+                        }
+                        continue;
+                    }
 
                     const premise = new Premise(candidateAtoms);
+                    const features = premise.getFeatures();
                     const signatures = this.state.novelty.buildSignatures(premise);
                     const novelty = this.state.novelty.evaluate(premise, signatures, trialIndex);
 
@@ -1471,7 +1601,7 @@
                         continue;
                     }
 
-                    const satResult = this.solver.evaluate(windowAtoms, premise.atoms);
+                    const satResult = this.solver.evaluate(windowAtoms, candidateAtoms);
                     if (!satResult.ok) {
                         continue;
                     }
@@ -1479,19 +1609,17 @@
                     let certificate = null;
                     let midDerivable = false;
 
-                    if (plannedMatch) {
+                    if (effectiveMatch) {
                         const equivalence = this.equivalence.computeCertificate(nBackPremise, premise, middleAtoms);
                         if (!equivalence.match) {
                             continue;
                         }
                         certificate = equivalence.certificate;
                         midDerivable = equivalence.midWindowDerivable;
-                    } else {
-                        if (nBackPremise) {
-                            const check = this.equivalence.computeCertificate(nBackPremise, premise, middleAtoms);
-                            if (check.match) {
-                                continue;
-                            }
+                    } else if (nBackPremise) {
+                        const check = this.equivalence.computeCertificate(nBackPremise, premise, middleAtoms);
+                        if (check.match) {
+                            continue;
                         }
                     }
 
@@ -1504,16 +1632,352 @@
                             satResult,
                             certificate,
                             midDerivable,
-                            attempts
+                            attempts,
+                            modeUsed: mode,
+                            features
                         };
                     }
 
                     if (this.state.rng.next() < Math.min(1, score)) {
                         return bestCandidate;
                     }
+
+                    if (attempts % 12 === 0 && this.planner) {
+                        mode = this.planner.chooseConflictMode(effectiveMatch);
+                    }
                 }
 
                 return bestCandidate;
+            }
+
+            makePremiseWithMode(mode, context) {
+                const requiresNBack = ['ASNM', 'APNM', 'PPHF', 'BSM', 'WLC', 'CAC', 'ISD'];
+                if (!context.nBackPremise && requiresNBack.includes(mode)) {
+                    return this.buildNovelPremise(context.pool, context.k, context.avoidLetters);
+                }
+                switch (mode) {
+                    case 'ASNM':
+                        return this.makeAxisSwapNearMiss(context);
+                    case 'APNM':
+                        return this.makeAnchorPermutationNearMiss(context);
+                    case 'PPHF':
+                        return this.makeParityPreservedHubFlip(context);
+                    case 'CBB':
+                        return this.makeCycleBorderBait(context);
+                    case 'BSM':
+                        return this.makeBipartiteSignatureMatch(context);
+                    case 'WLC':
+                        return this.makeWrongLagCamouflage(context);
+                    case 'CAC':
+                        return this.makeCrossAxisCoupling(context);
+                    case 'ISD':
+                        return this.makeIsomorphicSkeletonDecoy(context);
+                    default:
+                        return context.plannedMatch
+                            ? this.buildMatchCandidate(context.nBackPremise, context.pool, context.k)
+                            : this.buildNovelPremise(context.pool, context.k, context.avoidLetters);
+                }
+            }
+
+            cloneAtoms(premise) {
+                return premise.atoms.map(atom => new Atom(atom.axis, atom.head, atom.tail));
+            }
+
+            sampleNewLetter(excludeSet = new Set()) {
+                const candidates = this.state.letters.filter(letter => !excludeSet.has(letter));
+                if (candidates.length === 0) return null;
+                return this.state.rng.choice(candidates);
+            }
+
+            normalizeAtomCount(atoms, pool, target, avoidLetters, options = {}) {
+                if (!atoms) return null;
+                const clones = atoms.map(atom => new Atom(atom.axis, atom.head, atom.tail));
+                const required = new Set();
+                if (typeof options.requiredIndex === 'number') {
+                    required.add(options.requiredIndex);
+                }
+                if (Array.isArray(options.requiredIndices)) {
+                    options.requiredIndices.forEach(idx => required.add(idx));
+                }
+
+                const result = [];
+                const usedKeys = new Set();
+                const pushAtom = (atom) => {
+                    const key = atom.toKey();
+                    if (usedKeys.has(key)) return false;
+                    result.push(atom);
+                    usedKeys.add(key);
+                    return true;
+                };
+
+                for (const idx of required) {
+                    if (idx >= 0 && idx < clones.length) {
+                        pushAtom(clones[idx]);
+                    }
+                }
+
+                for (let i = 0; i < clones.length && result.length < target; i++) {
+                    if (required.has(i)) continue;
+                    pushAtom(clones[i]);
+                }
+
+                const poolLetters = pool.length > 0 ? pool : this.state.letters;
+                let attempts = 0;
+                while (result.length < target && attempts < 200) {
+                    attempts++;
+                    const head = this.state.rng.choice(poolLetters);
+                    if (avoidLetters && avoidLetters.has(head)) continue;
+                    let tailCandidates = poolLetters.filter(letter => letter !== head);
+                    if (avoidLetters) {
+                        tailCandidates = tailCandidates.filter(letter => !avoidLetters.has(letter));
+                    }
+                    if (tailCandidates.length === 0) continue;
+                    const tail = this.state.rng.choice(tailCandidates);
+                    const axis = this.state.rng.choice(MATCH_AXES);
+                    const atom = new Atom(axis, head, tail);
+                    if (usedKeys.has(atom.toKey())) continue;
+                    pushAtom(atom);
+                }
+
+                if (result.length !== target) return null;
+                return result;
+            }
+
+            makeAxisSwapNearMiss({ nBackPremise, k, pool, avoidLetters }) {
+                if (!nBackPremise || nBackPremise.atoms.length === 0) return null;
+                const base = this.cloneAtoms(nBackPremise);
+                const index = this.state.rng.nextInt(0, base.length - 1);
+                const axisOptions = MATCH_AXES.filter(axis => axis !== base[index].axis);
+                if (axisOptions.length === 0) return null;
+                base[index] = new Atom(this.state.rng.choice(axisOptions), base[index].head, base[index].tail);
+                return this.normalizeAtomCount(base, pool, k, avoidLetters, { requiredIndex: index });
+            }
+
+            makeAnchorPermutationNearMiss({ nBackPremise, k, pool }) {
+                if (!nBackPremise) return null;
+                const letters = Array.from(nBackPremise.getLetters());
+                if (letters.length < 2) return null;
+                const anchor = this.state.rng.choice(letters);
+                const mapping = new Map();
+                mapping.set(anchor, anchor);
+                const used = new Set([anchor]);
+                for (const letter of letters) {
+                    if (letter === anchor) continue;
+                    let replacement = null;
+                    let tries = 0;
+                    while (tries < 80) {
+                        tries++;
+                        replacement = this.sampleNewLetter(new Set([...letters, ...used]));
+                        if (!replacement || replacement === anchor) continue;
+                        mapping.set(letter, replacement);
+                        used.add(replacement);
+                        break;
+                    }
+                    if (!mapping.has(letter)) return null;
+                }
+                const atoms = nBackPremise.atoms.map(atom => {
+                    const head = mapping.get(atom.head) || atom.head;
+                    const tail = mapping.get(atom.tail) || atom.tail;
+                    return new Atom(atom.axis, head, tail);
+                });
+                return this.normalizeAtomCount(atoms, pool, k, null);
+            }
+
+            makeParityPreservedHubFlip({ nBackPremise, k, pool, avoidLetters }) {
+                if (!nBackPremise) return null;
+                const counts = new Map();
+                nBackPremise.atoms.forEach(atom => {
+                    counts.set(atom.head, (counts.get(atom.head) || 0) + 1);
+                    counts.set(atom.tail, (counts.get(atom.tail) || 0) + 1);
+                });
+                const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+                if (!sorted.length || sorted[0][1] < 2) return null;
+                const hub = sorted[0][0];
+                const exclude = new Set(nBackPremise.getLetters());
+                let newHub = this.sampleNewLetter(exclude);
+                if (!newHub) return null;
+                const atoms = nBackPremise.atoms.map(atom => {
+                    const head = atom.head === hub ? newHub : atom.head;
+                    const tail = atom.tail === hub ? newHub : atom.tail;
+                    return new Atom(atom.axis, head, tail);
+                });
+                return this.normalizeAtomCount(atoms, pool, k, avoidLetters);
+            }
+
+            makeCycleBorderBait({ k, pool, avoidLetters }) {
+                const uniquePool = Array.from(new Set(pool));
+                const targetLetters = Math.max(3, Math.min(k + 1, 6));
+                const letters = [];
+                const used = new Set();
+                const shuffled = this.state.rng.shuffle(uniquePool);
+                for (const letter of shuffled) {
+                    if (letters.length >= targetLetters) break;
+                    letters.push(letter);
+                    used.add(letter);
+                }
+                while (letters.length < targetLetters) {
+                    const next = this.sampleNewLetter(used);
+                    if (!next) break;
+                    letters.push(next);
+                    used.add(next);
+                }
+                if (letters.length < 3) return null;
+                const axes = ['N', 'E', 'S', 'W'];
+                const atoms = [];
+                for (let i = 0; i < Math.min(k, letters.length - 1); i++) {
+                    const axis = axes[i % axes.length];
+                    atoms.push(new Atom(axis, letters[i], letters[i + 1]));
+                }
+                if (atoms.length < k) {
+                    const axis = axes[atoms.length % axes.length];
+                    const head = letters[letters.length - 1];
+                    const tailIndex = letters.length > 2 ? 1 : 0;
+                    atoms.push(new Atom(axis, head, letters[tailIndex]));
+                }
+                return this.normalizeAtomCount(atoms, pool, k, avoidLetters);
+            }
+
+            makeBipartiteSignatureMatch({ nBackPremise, k, pool }) {
+                if (!nBackPremise) return null;
+                const targetFeatures = nBackPremise.getFeatures();
+                for (let attempt = 0; attempt < 12; attempt++) {
+                    const atoms = this.buildMatchCandidate(nBackPremise, pool, k);
+                    if (!atoms) return null;
+                    const candidate = new Premise(atoms);
+                    if (candidate.toKey() === nBackPremise.toKey()) continue;
+                    if (!this.compareDegreeVectors(candidate.getFeatures().degreeVector, targetFeatures.degreeVector)) {
+                        continue;
+                    }
+                    return atoms;
+                }
+                return null;
+            }
+
+            makeWrongLagCamouflage({ trialIndex, n, state, pool, k }) {
+                let altPremise = null;
+                if (n > 1) {
+                    altPremise = state.getPremiseAt(trialIndex - (n - 1));
+                }
+                if (!altPremise) {
+                    altPremise = state.getPremiseAt(trialIndex - (n + 1));
+                }
+                if (!altPremise) return null;
+                for (let attempt = 0; attempt < 10; attempt++) {
+                    const atoms = this.buildMatchCandidate(altPremise, pool, k);
+                    if (!atoms) return null;
+                    const candidate = new Premise(atoms);
+                    const equivalence = this.equivalence.computeCertificate(altPremise, candidate, []);
+                    if (!equivalence.match) {
+                        continue;
+                    }
+                    return atoms;
+                }
+                return null;
+            }
+
+            makeCrossAxisCoupling(context) {
+                const { nBackPremise, pool, k, plannedMatch, avoidLetters } = context;
+                if (!nBackPremise) {
+                    return plannedMatch
+                        ? this.buildMatchCandidate(nBackPremise, pool, k)
+                        : this.buildNovelPremise(pool, k, avoidLetters);
+                }
+                if (plannedMatch) {
+                    for (let attempt = 0; attempt < 12; attempt++) {
+                        const atoms = this.buildMatchCandidate(nBackPremise, pool, k);
+                        if (!atoms) return null;
+                        const candidate = new Premise(atoms);
+                        if (candidate.toKey() === nBackPremise.toKey()) continue;
+                        if (!this.hasCrossAxisCoupling(nBackPremise, candidate)) continue;
+                        return atoms;
+                    }
+                    return null;
+                }
+                const atoms = this.makeParityPreservedHubFlip({ nBackPremise, k, pool, avoidLetters });
+                if (!atoms) return null;
+                const candidate = new Premise(atoms);
+                return this.hasCrossAxisCoupling(nBackPremise, candidate) ? atoms : null;
+            }
+
+            makeIsomorphicSkeletonDecoy({ nBackPremise, k, pool }) {
+                if (!nBackPremise) return null;
+                const letters = Array.from(nBackPremise.getLetters());
+                if (letters.length === 0) return null;
+                const sorted = [...letters].sort();
+                const anchor = this.state.rng.choice(sorted);
+                const mapping = new Map();
+                mapping.set(anchor, anchor);
+                const used = new Set([anchor]);
+                for (const letter of sorted) {
+                    if (letter === anchor) continue;
+                    let replacement = null;
+                    let tries = 0;
+                    while (tries < 80) {
+                        tries++;
+                        replacement = this.sampleNewLetter(new Set([...letters, ...used]));
+                        if (!replacement || replacement === anchor) continue;
+                        mapping.set(letter, replacement);
+                        used.add(replacement);
+                        break;
+                    }
+                    if (!mapping.has(letter)) return null;
+                }
+                const atoms = nBackPremise.atoms.map(atom => {
+                    const head = mapping.get(atom.head) || atom.head;
+                    const tail = mapping.get(atom.tail) || atom.tail;
+                    return new Atom(atom.axis, head, tail);
+                });
+                const candidate = new Premise(atoms);
+                if (candidate.isoSignature() !== nBackPremise.isoSignature()) {
+                    return null;
+                }
+                return this.normalizeAtomCount(candidate.atoms, pool, k, null);
+            }
+
+            compareDegreeVectors(a, b) {
+                if (a.size !== b.size) return false;
+                for (const [letter, vecA] of a.entries()) {
+                    const vecB = b.get(letter);
+                    if (!vecB) return false;
+                    for (let i = 0; i < vecA.length; i++) {
+                        if (vecA[i] !== vecB[i]) return false;
+                    }
+                }
+                return true;
+            }
+
+            collectAxisUsage(premise) {
+                const usage = new Map();
+                const mark = (letter, axis) => {
+                    if (!usage.has(letter)) {
+                        usage.set(letter, { vertical: false, horizontal: false });
+                    }
+                    const entry = usage.get(letter);
+                    if (axis === 'N' || axis === 'S') {
+                        entry.vertical = true;
+                    } else {
+                        entry.horizontal = true;
+                    }
+                };
+                premise.atoms.forEach(atom => {
+                    mark(atom.head, atom.axis);
+                    mark(atom.tail, atom.axis);
+                });
+                return usage;
+            }
+
+            hasCrossAxisCoupling(p1, p2) {
+                const usage1 = this.collectAxisUsage(p1);
+                const usage2 = this.collectAxisUsage(p2);
+                const letters = new Set([...usage1.keys(), ...usage2.keys()]);
+                for (const letter of letters) {
+                    const info1 = usage1.get(letter) || { vertical: false, horizontal: false };
+                    const info2 = usage2.get(letter) || { vertical: false, horizontal: false };
+                    if ((info1.vertical || info2.vertical) && (info1.horizontal || info2.horizontal)) {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             buildMatchCandidate(nBackPremise, pool, k) {
@@ -1691,24 +2155,21 @@
 
         class GameEngine {
             constructor() {
+                this.session = session;
                 this.seedManager = new SeedManager();
                 this.logger = new GameLogger();
                 this.voice = new VoiceSynthesis();
-                this.secondsPerTrial = 6;
-                this.n = 2;
-                this.k = 1;
-                this.totalTrials = 60;
                 this.state = null;
                 this.solver = null;
                 this.equivalence = new EquivalenceEngine(false);
                 this.generator = null;
                 this.planner = null;
                 this.matchSchedule = [];
-                this.trialIndex = 0;
                 this.awaitingResponse = false;
                 this.sessionToken = 0;
                 this.responseResolver = null;
                 this.responseTimer = null;
+                this.pendingTrialHandle = null;
                 this.responseStartTime = 0;
                 this.currentPremises = [];
                 this.score = 0;
@@ -1717,10 +2178,146 @@
                 this.omissions = 0;
                 this.recentAccuracy = [];
                 this.M = 8;
-                this.gameRunning = false;
                 this.lockSeed = this.seedManager.getLockPreference();
                 this.resetOnRestart = false;
                 this.pendingPlannerFlip = false;
+                this.pendingRestart = false;
+                this.statusMessage = 'Idle';
+            }
+
+            get n() {
+                return this.session.n;
+            }
+
+            set n(value) {
+                this.session.n = value;
+            }
+
+            get k() {
+                return this.session.k;
+            }
+
+            set k(value) {
+                this.session.k = value;
+            }
+
+            get secondsPerTrial() {
+                return this.session.secondsPerTrial;
+            }
+
+            set secondsPerTrial(value) {
+                this.session.secondsPerTrial = value;
+            }
+
+            get totalTrials() {
+                return this.session.numTrials;
+            }
+
+            set totalTrials(value) {
+                this.session.numTrials = value;
+            }
+
+            applyNumTrialsFromUI() {
+                const v = Math.max(1, Math.min(10000, parseInt(numTrialsInput.value || '20', 10)));
+                this.session.numTrials = v;
+            }
+
+            clearAllTimers() {
+                if (this.responseTimer) {
+                    clearTimeout(this.responseTimer);
+                    this.responseTimer = null;
+                }
+                if (this.pendingTrialHandle) {
+                    clearTimeout(this.pendingTrialHandle);
+                    this.pendingTrialHandle = null;
+                }
+            }
+
+            speakOnce(text) {
+                if (!text) return;
+                this.voice.speak(text, this.sessionToken);
+            }
+
+            renderSummary() {
+                this.statusMessage = `Session complete. ${this.session.numTrials} trials finished.`;
+                document.getElementById('feedback').textContent = '';
+            }
+
+            scheduleNextTrial() {
+                if (this.session.state !== 'RUNNING') return;
+                if (this.pendingTrialHandle) {
+                    clearTimeout(this.pendingTrialHandle);
+                    this.pendingTrialHandle = null;
+                }
+                if (this.session.trialIndex >= this.session.numTrials) {
+                    this.endSession();
+                    return;
+                }
+
+                const token = this.sessionToken;
+                this.pendingTrialHandle = setTimeout(async () => {
+                    this.pendingTrialHandle = null;
+                    if (token !== this.sessionToken || this.session.state !== 'RUNNING') {
+                        return;
+                    }
+                    try {
+                        await this.runTrial(token);
+                        if (token === this.sessionToken) {
+                            this.onTrialFinished();
+                        }
+                    } catch (error) {
+                        console.error('Trial execution failed', error);
+                        await this.stopSession(false);
+                    }
+                }, 0);
+            }
+
+            onTrialFinished() {
+                if (this.session.state !== 'RUNNING') return;
+                this.session.trialIndex += 1;
+                this.updateUI();
+                if (this.session.trialIndex >= this.session.numTrials) {
+                    this.endSession();
+                } else {
+                    this.scheduleNextTrial();
+                }
+            }
+
+            async stopSession(skipSummary = false) {
+                const wasRunning = this.session.state === 'RUNNING' || this.session.state === 'PAUSED';
+                this.session.state = 'STOPPED';
+                this.sessionToken += 1;
+                this.clearAllTimers();
+                await this.voice.cancelAndWait();
+                this.awaitingResponse = false;
+                if (this.responseResolver) {
+                    this.responseResolver(null);
+                    this.responseResolver = null;
+                }
+                if (!skipSummary && wasRunning) {
+                    this.statusMessage = 'Stopped';
+                }
+                this.updateUI();
+            }
+
+            async endSession() {
+                this.session.state = 'STOPPED';
+                this.clearAllTimers();
+                await this.voice.cancelAndWait();
+                this.awaitingResponse = false;
+                if (this.responseResolver) {
+                    this.responseResolver(null);
+                    this.responseResolver = null;
+                }
+                this.speakOnce(`Session complete. ${this.session.numTrials} trials finished.`);
+                this.renderSummary();
+                this.updateUI();
+            }
+
+            async restartSession() {
+                this.pendingRestart = true;
+                await this.stopSession(true);
+                this.startSession();
             }
 
             async initialize() {
@@ -1774,9 +2371,16 @@
                     document.getElementById('k-value').textContent = this.k;
                 });
 
-                document.getElementById('start-btn').addEventListener('click', () => this.start(true));
-                document.getElementById('restart-btn').addEventListener('click', () => this.start(false));
-                document.getElementById('stop-btn').addEventListener('click', () => this.stop());
+                document.getElementById('start-btn').addEventListener('click', () => {
+                    this.pendingRestart = false;
+                    this.startSession();
+                });
+                document.getElementById('restart-btn').addEventListener('click', () => {
+                    this.restartSession();
+                });
+                document.getElementById('stop-btn').addEventListener('click', () => {
+                    this.stopSession(false);
+                });
                 document.getElementById('match-btn').addEventListener('click', () => this.handleResponse(true));
                 document.getElementById('no-match-btn').addEventListener('click', () => this.handleResponse(false));
                 document.getElementById('repeat-btn').addEventListener('click', () => this.handleRepeat());
@@ -1824,7 +2428,7 @@
             }
 
             updateUI() {
-                document.getElementById('trial-count').textContent = this.trialIndex;
+                document.getElementById('trial-count').textContent = this.session.trialIndex;
                 document.getElementById('score').textContent = this.score;
                 document.getElementById('omissions').textContent = this.omissions;
                 const accuracy = this.totalResponses > 0 ? (this.correctResponses / this.totalResponses) * 100 : null;
@@ -1834,19 +2438,19 @@
                     : null;
                 document.getElementById('rolling-acc').textContent = rolling !== null ? `${rolling.toFixed(1)}%` : '-';
 
-                document.getElementById('status').textContent = this.gameRunning
-                    ? `Running (n=${this.n}, k=${this.k})`
-                    : 'Idle';
+                const running = this.session.state === 'RUNNING';
+                const statusText = running ? `Running (n=${this.n}, k=${this.k})` : this.statusMessage;
+                document.getElementById('status').textContent = statusText;
 
-                document.getElementById('start-btn').disabled = this.gameRunning;
-                document.getElementById('restart-btn').disabled = !this.gameRunning;
-                document.getElementById('stop-btn').disabled = !this.gameRunning;
+                document.getElementById('start-btn').disabled = running;
+                document.getElementById('restart-btn').disabled = !running;
+                document.getElementById('stop-btn').disabled = !running;
             }
 
-            async start(isFreshStart) {
-                if (this.gameRunning) return;
-                this.gameRunning = true;
-                this.trialIndex = 0;
+            startSession() {
+                if (this.session.state === 'RUNNING') return;
+                this.applyNumTrialsFromUI();
+                this.session.trialIndex = 0;
                 this.score = 0;
                 this.correctResponses = 0;
                 this.totalResponses = 0;
@@ -1854,61 +2458,42 @@
                 this.recentAccuracy = [];
                 this.pendingPlannerFlip = false;
 
+                const shouldResetLogs = !this.pendingRestart || this.resetOnRestart;
+                this.pendingRestart = false;
+
                 const seed = this.seedManager.generateSessionSeed(this.lockSeed);
+                this.session.seedSession = seed;
                 this.state = new GameState(seed, { windowSize: Math.max(2 * this.n + 2, 12) });
                 this.state.resetNovelty();
                 this.solver = new ConstraintSolver();
                 this.generator = new PremiseGenerator(this.state, this.solver, this.equivalence);
                 this.planner = new MatchPlanner(this.state.rng);
+                this.generator.setPlanner(this.planner);
                 this.matchSchedule = this.planner.plan(this.totalTrials, this.n);
-                if (isFreshStart || this.resetOnRestart) {
+                if (shouldResetLogs) {
                     this.logger.reset();
                 }
                 this.currentPremises = [];
-
-                this.updateUI();
+                this.statusMessage = `Running (n=${this.n}, k=${this.k})`;
+                this.session.state = 'RUNNING';
                 this.sessionToken += 1;
-                const currentSession = this.sessionToken;
 
-                while (this.trialIndex < this.totalTrials && this.gameRunning && currentSession === this.sessionToken) {
-                    await this.runTrial(currentSession);
-                    this.trialIndex += 1;
-                    this.updateUI();
-                }
-
-                if (currentSession === this.sessionToken) {
-                    this.stop();
-                }
-            }
-
-            stop() {
-                this.gameRunning = false;
-                this.awaitingResponse = false;
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                if (this.responseResolver) {
-                    this.responseResolver(null);
-                    this.responseResolver = null;
-                }
-                document.getElementById('match-btn').disabled = true;
-                document.getElementById('no-match-btn').disabled = true;
-                document.getElementById('repeat-btn').disabled = true;
                 this.updateUI();
+                this.scheduleNextTrial();
             }
 
             async runTrial(sessionToken) {
-                if (!this.gameRunning) return;
+                if (this.session.state !== 'RUNNING' || sessionToken !== this.sessionToken) return;
 
-                const plannedMatch = this.matchSchedule[this.trialIndex] || false;
-                const nBackIndex = this.trialIndex - this.n;
+                const currentIndex = this.session.trialIndex;
+                const plannedMatch = this.matchSchedule[currentIndex] || false;
+                const nBackIndex = currentIndex - this.n;
                 const nBackPremise = nBackIndex >= 0 ? this.currentPremises[nBackIndex] : null;
-                const middleAtoms = nBackIndex >= 0 ? this.state.getConstraintsInRange(nBackIndex + 1, this.trialIndex - 1) : [];
-                const cooldown = this.state.getActiveCooldown(this.trialIndex);
+                const middleAtoms = nBackIndex >= 0 ? this.state.getConstraintsInRange(nBackIndex + 1, currentIndex - 1) : [];
+                const cooldown = this.state.getActiveCooldown(currentIndex);
 
                 let result = this.generator.generate({
-                    trialIndex: this.trialIndex,
+                    trialIndex: currentIndex,
                     k: this.k,
                     n: this.n,
                     plannedMatch,
@@ -1921,10 +2506,10 @@
                 let plannerFlip = false;
 
                 if (!result && plannedMatch) {
-                    this.planner.forceFlip(this.trialIndex);
+                    this.planner.forceFlip(currentIndex);
                     plannerFlip = true;
                     result = this.generator.generate({
-                        trialIndex: this.trialIndex,
+                        trialIndex: currentIndex,
                         k: this.k,
                         n: this.n,
                         plannedMatch: false,
@@ -1936,13 +2521,14 @@
                 }
 
                 if (!result) {
-                    this.stop();
+                    await this.stopSession(false);
                     return;
                 }
 
-                const { premise, signatures, novelty, satResult, certificate } = result;
+                const { premise, signatures, novelty, satResult, certificate, modeUsed, features } = result;
+                const featureSnapshot = features || premise.getFeatures();
                 this.currentPremises.push(premise);
-                this.state.recordPremise(premise, premise.atoms, { plannedMatch, certificate });
+                this.state.recordPremise(premise, premise.atoms, { plannedMatch, certificate, modeUsed });
                 this.state.novelty.register(signatures);
                 this.state.coordinates = satResult.coordinates;
 
@@ -2012,12 +2598,25 @@
                 }
 
                 if (actualMatch && certificate) {
-                    this.state.applyCooldown(Array.from(premise.getLetters()), this.trialIndex, this.n);
+                    this.state.applyCooldown(Array.from(premise.getLetters()), currentIndex, this.n);
                 }
+
+                const featureLog = {
+                    lettersSet: Array.from(featureSnapshot.lettersSet).sort(),
+                    degreeVector: {},
+                    skeletonIsoSignature: featureSnapshot.skeletonIsoSignature,
+                    atomAxisProfile: {}
+                };
+                featureSnapshot.degreeVector.forEach((vec, letter) => {
+                    featureLog.degreeVector[letter] = [...vec];
+                });
+                featureSnapshot.atomAxisProfile.forEach((count, axis) => {
+                    featureLog.atomAxisProfile[axis] = count;
+                });
 
                 const logEntry = {
                     seedSession: this.seedManager.sessionSeed,
-                    trialIndex: this.trialIndex,
+                    trialIndex: currentIndex,
                     n: this.n,
                     k: this.k,
                     letters: Array.from(premise.getLetters()).join(''),
@@ -2030,8 +2629,10 @@
                     midWindowDerivable: certificate ? certificate.midWindowDerivable : false,
                     noveltyScores: novelty.noveltyScores,
                     response: { choice: response, correct, rtMs: rt, omission },
-                    cooldownLetters: Array.from(this.state.getActiveCooldown(this.trialIndex + 1)),
-                    plannerFlip: plannerFlip || this.planner.wasFlipped(this.trialIndex)
+                    cooldownLetters: Array.from(this.state.getActiveCooldown(currentIndex + 1)),
+                    plannerFlip: plannerFlip || this.planner.wasFlipped(currentIndex),
+                    modeUsed,
+                    features: featureLog
                 };
 
                 this.logger.add(logEntry);
@@ -2066,7 +2667,7 @@
                     this.responseTimer = null;
                 }
                 await this.voice.cancelAndWait();
-                await this.voice.speakPremise(this.currentPremises[this.trialIndex], this.sessionToken);
+                await this.voice.speakPremise(this.currentPremises[this.session.trialIndex], this.sessionToken);
                 if (!this.awaitingResponse) return;
                 this.responseStartTime = Date.now();
                 this.responseTimer = setTimeout(() => {
