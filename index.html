@@ -1,0 +1,2038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sound Relational N-Back</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        h1 {
+            margin: 20px 0;
+            font-size: 2rem;
+            text-align: center;
+        }
+
+        .container {
+            max-width: 900px;
+            width: 100%;
+        }
+
+        .controls {
+            background: #16213e;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .control-group {
+            margin-bottom: 20px;
+        }
+
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            height: 8px;
+            background: #0f3460;
+            border-radius: 4px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #e94560;
+            cursor: pointer;
+            border-radius: 50%;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #e94560;
+            cursor: pointer;
+            border-radius: 50%;
+            border: none;
+        }
+
+        input[type="range"]:focus {
+            outline: 2px solid #e94560;
+            outline-offset: 2px;
+        }
+
+        .range-value {
+            display: inline-block;
+            min-width: 30px;
+            text-align: right;
+            font-weight: bold;
+            color: #e94560;
+        }
+
+        button {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        button:hover {
+            background: #d63651;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(233, 69, 96, 0.3);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:focus {
+            outline: 2px solid #e94560;
+            outline-offset: 2px;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        button.secondary {
+            background: #0f3460;
+        }
+
+        button.secondary:hover:not(:disabled) {
+            background: #1a4d7a;
+        }
+
+        .game-area {
+            background: #16213e;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .status {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+            width: 100%;
+        }
+
+        .stat-box {
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: #aaa;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #e94560;
+        }
+
+        .response-buttons {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .response-buttons button {
+            flex: 1;
+            padding: 20px;
+            font-size: 1.2rem;
+        }
+
+        .match-btn {
+            background: #2ecc71;
+        }
+
+        .match-btn:hover:not(:disabled) {
+            background: #27ae60;
+        }
+
+        .no-match-btn {
+            background: #e74c3c;
+        }
+
+        .no-match-btn:hover:not(:disabled) {
+            background: #c0392b;
+        }
+
+        .feedback {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 1.1rem;
+            min-height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .feedback.correct {
+            background: rgba(46, 204, 113, 0.2);
+            color: #2ecc71;
+        }
+
+        .feedback.incorrect {
+            background: rgba(231, 76, 60, 0.2);
+            color: #e74c3c;
+        }
+
+        #debug {
+            background: #0a0e1a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        #debug h3 {
+            margin-bottom: 15px;
+            color: #e94560;
+        }
+
+        .debug-premise {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: #16213e;
+            border-radius: 4px;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        .checkbox-group input[type="checkbox"]:focus {
+            outline: 2px solid #e94560;
+            outline-offset: 2px;
+        }
+
+        .test-panel {
+            background: #0a0e1a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+
+        .test-result {
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        .test-result.pass {
+            background: rgba(46, 204, 113, 0.2);
+            color: #2ecc71;
+        }
+
+        .test-result.fail {
+            background: rgba(231, 76, 60, 0.2);
+            color: #e74c3c;
+        }
+
+        .premise-display {
+            font-size: 1.3rem;
+            color: #aaa;
+            margin: 20px 0;
+            min-height: 60px;
+            font-style: italic;
+        }
+
+        .voice-info {
+            background: #0f3460;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            color: #aaa;
+            margin-top: 10px;
+        }
+
+        .voice-info strong {
+            color: #e94560;
+        }
+
+        @media (max-width: 600px) {
+            .stats {
+                grid-template-columns: 1fr 1fr;
+            }
+            
+            .response-buttons {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧠 Sound Relational N-Back</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label>N-Back Level: <span class="range-value" id="n-value">2</span></label>
+                <input type="range" id="n-slider" min="1" max="5" value="2">
+            </div>
+            
+            <div class="control-group">
+                <label>Atoms per Premise (k): <span class="range-value" id="k-value">1</span></label>
+                <input type="range" id="k-slider" min="1" max="4" value="1">
+            </div>
+            
+            <div class="control-group">
+                <label>Speech Rate: <span class="range-value" id="rate-value">0.95</span></label>
+                <input type="range" id="rate-slider" min="0.85" max="1.05" step="0.05" value="0.95">
+            </div>
+            
+            <div class="control-group checkbox-group">
+                <input type="checkbox" id="transitivity-toggle">
+                <label for="transitivity-toggle" style="margin-bottom: 0;">Enable Advanced Transitivity</label>
+            </div>
+            
+            <div class="control-group checkbox-group">
+                <input type="checkbox" id="debug-toggle">
+                <label for="debug-toggle" style="margin-bottom: 0;">Show Debug Panel</label>
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <button id="start-btn" disabled>Start Game</button>
+                <button id="pause-btn" class="secondary" disabled>Pause</button>
+                <button id="repeat-btn" class="secondary" disabled>Repeat Audio</button>
+                <button id="preview-btn" class="secondary">Voice Preview</button>
+                <button id="test-btn" class="secondary">Run Tests</button>
+                <button id="export-btn" class="secondary">Export Data</button>
+            </div>
+            
+            <div class="voice-info" id="voice-info">Initializing voice...</div>
+        </div>
+        
+        <div class="game-area">
+            <div class="status" id="status">Preparing voice system...</div>
+            <div class="premise-display" id="premise-display"></div>
+            
+            <div class="response-buttons">
+                <button class="match-btn" id="match-btn" disabled>
+                    MATCH<br><small>(Spacebar)</small>
+                </button>
+                <button class="no-match-btn" id="no-match-btn" disabled>
+                    NO MATCH<br><small>(Enter)</small>
+                </button>
+            </div>
+            
+            <div class="feedback" id="feedback"></div>
+            
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-label">Trial</div>
+                    <div class="stat-value" id="trial-count">0</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Score</div>
+                    <div class="stat-value" id="score">0</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Accuracy</div>
+                    <div class="stat-value" id="accuracy">-</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Rolling Acc.</div>
+                    <div class="stat-value" id="rolling-acc">-</div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="debug" hidden>
+            <h3>Debug Panel - Last Premises</h3>
+            <div id="debug-content"></div>
+        </div>
+        
+        <div id="test-panel" class="test-panel" hidden>
+            <h3>Test Results</h3>
+            <div id="test-results"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        // ============================================================================
+        // DETERMINISTIC RNG
+        // ============================================================================
+        class RNG {
+            constructor(seed = Date.now()) {
+                this.seed = seed >>> 0;
+                this.state = seed >>> 0;
+            }
+            
+            next() {
+                this.state = (this.state * 1664525 + 1013904223) >>> 0;
+                return this.state / 0x100000000;
+            }
+            
+            nextInt(min, max) {
+                return Math.floor(this.next() * (max - min + 1)) + min;
+            }
+            
+            shuffle(array) {
+                const arr = [...array];
+                for (let i = arr.length - 1; i > 0; i--) {
+                    const j = Math.floor(this.next() * (i + 1));
+                    [arr[i], arr[j]] = [arr[j], arr[i]];
+                }
+                return arr;
+            }
+            
+            choice(array) {
+                return array[Math.floor(this.next() * array.length)];
+            }
+        }
+
+        // ============================================================================
+        // STATE MANAGEMENT
+        // ============================================================================
+        class GameState {
+            constructor(seed) {
+                this.rng = new RNG(seed);
+                this.seed = seed;
+                this.letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+                this.coordinates = new Map();
+                this.constraintStore = [];
+                this.currentStep = 0;
+                this.W = 7;
+                this.letterQuotas = { head: new Set(), tail: new Set() };
+                this.lastMatchStep = -100;
+                this.recentLetterUse = new Map();
+                
+                this.initializeCoordinates();
+            }
+            
+            initializeCoordinates() {
+                const initialLetters = this.rng.shuffle(this.letters).slice(0, 12);
+                initialLetters.forEach(letter => {
+                    this.coordinates.set(letter, {
+                        x: this.rng.nextInt(-5, 5),
+                        y: this.rng.nextInt(-5, 5)
+                    });
+                });
+            }
+            
+            ensureCoordinates(letters) {
+                letters.forEach(letter => {
+                    if (!this.coordinates.has(letter)) {
+                        let attempts = 0;
+                        while (attempts < 50) {
+                            const coord = {
+                                x: this.rng.nextInt(-5, 5),
+                                y: this.rng.nextInt(-5, 5)
+                            };
+                            
+                            let taken = false;
+                            for (const [_, c] of this.coordinates) {
+                                if (c.x === coord.x && c.y === coord.y) {
+                                    taken = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (!taken) {
+                                this.coordinates.set(letter, coord);
+                                return;
+                            }
+                            attempts++;
+                        }
+                        
+                        this.coordinates.set(letter, {
+                            x: this.rng.nextInt(-8, 8),
+                            y: this.rng.nextInt(-8, 8)
+                        });
+                    }
+                });
+            }
+            
+            addToConstraintStore(atoms) {
+                this.constraintStore.push({ step: this.currentStep, atoms });
+                
+                const cutoff = this.currentStep - this.W;
+                this.constraintStore = this.constraintStore.filter(c => c.step > cutoff);
+                
+                atoms.forEach(atom => {
+                    this.letterQuotas.head.add(atom.head);
+                    this.letterQuotas.tail.add(atom.tail);
+                });
+            }
+            
+            getWindowConstraints() {
+                return this.constraintStore.flatMap(c => c.atoms);
+            }
+            
+            getConstraintsInRange(startStep, endStep) {
+                return this.constraintStore
+                    .filter(c => c.step >= startStep && c.step <= endStep)
+                    .flatMap(c => c.atoms);
+            }
+        }
+
+        // ============================================================================
+        // CANONICAL ATOM REPRESENTATION
+        // ============================================================================
+        class Atom {
+            constructor(axis, head, tail) {
+                this.axis = axis;
+                this.head = head;
+                this.tail = tail;
+            }
+            
+            static invert(atom) {
+                const invMap = { 'N': 'S', 'S': 'N', 'E': 'W', 'W': 'E' };
+                return new Atom(invMap[atom.axis], atom.tail, atom.head);
+            }
+            
+            equals(other) {
+                return this.axis === other.axis && 
+                       this.head === other.head && 
+                       this.tail === other.tail;
+            }
+            
+            toString() {
+                const relMap = { 'N': 'north of', 'S': 'south of', 'E': 'east of', 'W': 'west of' };
+                return `${this.head} is ${relMap[this.axis]} ${this.tail}`;
+            }
+            
+            toKey() {
+                return `${this.axis},${this.head},${this.tail}`;
+            }
+            
+            static fromKey(key) {
+                const [axis, head, tail] = key.split(',');
+                return new Atom(axis, head, tail);
+            }
+        }
+
+        class Premise {
+            constructor(atoms) {
+                this.atoms = this.canonicalize(atoms);
+            }
+            
+            canonicalize(atoms) {
+                return [...atoms].sort((a, b) => {
+                    if (a.axis !== b.axis) return a.axis.localeCompare(b.axis);
+                    if (a.head !== b.head) return a.head.localeCompare(b.head);
+                    return a.tail.localeCompare(b.tail);
+                });
+            }
+            
+            getLetters() {
+                const letters = new Set();
+                this.atoms.forEach(atom => {
+                    letters.add(atom.head);
+                    letters.add(atom.tail);
+                });
+                return letters;
+            }
+            
+            toString() {
+                return this.atoms.map(a => a.toString()).join('; ');
+            }
+            
+            toKey() {
+                return this.atoms.map(a => a.toKey()).join('|');
+            }
+            
+            toNaturalSpeech() {
+                const relMap = { 'N': 'north of', 'S': 'south of', 'E': 'east of', 'W': 'west of' };
+                
+                if (this.atoms.length === 1) {
+                    const a = this.atoms[0];
+                    return `${a.head} is ${relMap[a.axis]} ${a.tail}.`;
+                }
+                
+                if (this.atoms.length === 2) {
+                    const a1 = this.atoms[0];
+                    const a2 = this.atoms[1];
+                    
+                    if (a1.head === a2.head) {
+                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}, and ${relMap[a2.axis]} ${a2.tail}.`;
+                    } else {
+                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}; ${a2.head} is ${relMap[a2.axis]} ${a2.tail}.`;
+                    }
+                }
+                
+                if (this.atoms.length === 3) {
+                    const a1 = this.atoms[0];
+                    const a2 = this.atoms[1];
+                    const a3 = this.atoms[2];
+                    
+                    if (a1.head === a2.head && a2.head === a3.head) {
+                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}, ${relMap[a2.axis]} ${a2.tail}, and ${relMap[a3.axis]} ${a3.tail}.`;
+                    } else if (a1.head === a2.head) {
+                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}, and ${relMap[a2.axis]} ${a2.tail}; ${a3.head} is ${relMap[a3.axis]} ${a3.tail}.`;
+                    } else {
+                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}; ${a2.head} is ${relMap[a2.axis]} ${a2.tail}; ${a3.head} is ${relMap[a3.axis]} ${a3.tail}.`;
+                    }
+                }
+                
+                if (this.atoms.length === 4) {
+                    const a1 = this.atoms[0];
+                    const a2 = this.atoms[1];
+                    const a3 = this.atoms[2];
+                    const a4 = this.atoms[3];
+                    
+                    const pairs = [];
+                    if (a1.head === a2.head) {
+                        pairs.push(`${a1.head} is ${relMap[a1.axis]} ${a1.tail}, and ${relMap[a2.axis]} ${a2.tail}`);
+                        if (a3.head === a4.head) {
+                            pairs.push(`${a3.head} is ${relMap[a3.axis]} ${a3.tail}, and ${relMap[a4.axis]} ${a4.tail}`);
+                        } else {
+                            pairs.push(`${a3.head} is ${relMap[a3.axis]} ${a3.tail}`);
+                            pairs.push(`${a4.head} is ${relMap[a4.axis]} ${a4.tail}`);
+                        }
+                    } else {
+                        pairs.push(`${a1.head} is ${relMap[a1.axis]} ${a1.tail}`);
+                        pairs.push(`${a2.head} is ${relMap[a2.axis]} ${a2.tail}`);
+                        pairs.push(`${a3.head} is ${relMap[a3.axis]} ${a3.tail}`);
+                        pairs.push(`${a4.head} is ${relMap[a4.axis]} ${a4.tail}`);
+                    }
+                    
+                    return pairs.join('; ') + '.';
+                }
+                
+                return this.atoms.map(a => `${a.head} is ${relMap[a.axis]} ${a.tail}`).join('; ') + '.';
+            }
+        }
+
+        // ============================================================================
+        // CONSTRAINT SATISFACTION SOLVER
+        // ============================================================================
+        class ConstraintSolver {
+            constructor(state) {
+                this.state = state;
+            }
+            
+            isSatisfiable(atoms) {
+                const letters = new Set();
+                atoms.forEach(atom => {
+                    letters.add(atom.head);
+                    letters.add(atom.tail);
+                });
+                
+                const constraints = [];
+                atoms.forEach(atom => {
+                    constraints.push({
+                        axis: atom.axis,
+                        head: atom.head,
+                        tail: atom.tail
+                    });
+                });
+                
+                for (let i = 0; i < constraints.length; i++) {
+                    for (let j = i + 1; j < constraints.length; j++) {
+                        const c1 = constraints[i];
+                        const c2 = constraints[j];
+                        
+                        if ((c1.head === c2.head && c1.tail === c2.tail) ||
+                            (c1.head === c2.tail && c1.tail === c2.head)) {
+                            
+                            if (c1.axis === 'N' || c1.axis === 'S') {
+                                if (c2.axis === 'N' || c2.axis === 'S') {
+                                    if (c1.head === c2.head && c1.tail === c2.tail && c1.axis !== c2.axis) {
+                                        return false;
+                                    }
+                                    if (c1.head === c2.tail && c1.tail === c2.head && c1.axis === c2.axis) {
+                                        return false;
+                                    }
+                                }
+                            }
+                            
+                            if (c1.axis === 'E' || c1.axis === 'W') {
+                                if (c2.axis === 'E' || c2.axis === 'W') {
+                                    if (c1.head === c2.head && c1.tail === c2.tail && c1.axis !== c2.axis) {
+                                        return false;
+                                    }
+                                    if (c1.head === c2.tail && c1.tail === c2.head && c1.axis === c2.axis) {
+                                        return false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                const assignment = new Map(this.state.coordinates);
+                
+                letters.forEach(letter => {
+                    if (!assignment.has(letter)) {
+                        assignment.set(letter, { x: 0, y: 0 });
+                    }
+                });
+                
+                return this.tryAssignment(Array.from(letters), constraints, assignment, 0);
+            }
+            
+            tryAssignment(letters, constraints, assignment, depth) {
+                if (depth > 100) return true;
+                
+                for (const c of constraints) {
+                    const headCoord = assignment.get(c.head);
+                    const tailCoord = assignment.get(c.tail);
+                    
+                    if (!headCoord || !tailCoord) continue;
+                    
+                    let satisfied = false;
+                    switch (c.axis) {
+                        case 'N':
+                            satisfied = headCoord.y > tailCoord.y && headCoord.x === tailCoord.x;
+                            break;
+                        case 'S':
+                            satisfied = headCoord.y < tailCoord.y && headCoord.x === tailCoord.x;
+                            break;
+                        case 'E':
+                            satisfied = headCoord.x > tailCoord.x && headCoord.y === tailCoord.y;
+                            break;
+                        case 'W':
+                            satisfied = headCoord.x < tailCoord.x && headCoord.y === tailCoord.y;
+                            break;
+                    }
+                    
+                    if (!satisfied) {
+                        if (depth < 50) {
+                            const newAssignment = new Map(assignment);
+                            
+                            const hc = {...headCoord};
+                            const tc = {...tailCoord};
+                            
+                            switch (c.axis) {
+                                case 'N':
+                                    hc.x = tc.x;
+                                    hc.y = tc.y + 1;
+                                    break;
+                                case 'S':
+                                    hc.x = tc.x;
+                                    hc.y = tc.y - 1;
+                                    break;
+                                case 'E':
+                                    hc.y = tc.y;
+                                    hc.x = tc.x + 1;
+                                    break;
+                                case 'W':
+                                    hc.y = tc.y;
+                                    hc.x = tc.x - 1;
+                                    break;
+                            }
+                            
+                            newAssignment.set(c.head, hc);
+                            
+                            if (this.tryAssignment(letters, constraints, newAssignment, depth + 1)) {
+                                newAssignment.forEach((coord, letter) => {
+                                    this.state.coordinates.set(letter, coord);
+                                });
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                }
+                
+                return true;
+            }
+        }
+
+        // ============================================================================
+        // RULE CHECKER
+        // ============================================================================
+        class RuleChecker {
+            constructor(state, solver, transitivityEnabled = false) {
+                this.state = state;
+                this.solver = solver;
+                this.transitivityEnabled = transitivityEnabled;
+            }
+            
+            checkWindowSatisfiability(newAtoms) {
+                const allConstraints = [...this.state.getWindowConstraints(), ...newAtoms];
+                return this.solver.isSatisfiable(allConstraints);
+            }
+            
+            checkNoIdentity(premise1, premise2) {
+                return premise1.toKey() !== premise2.toKey();
+            }
+            
+            computeTransformationCost(premise1, premise2) {
+                let cost = 0;
+                
+                const atoms1 = [...premise1.atoms];
+                const atoms2 = [...premise2.atoms];
+                
+                if (atoms1.length !== atoms2.length) return -1;
+                
+                const matched = new Set();
+                
+                for (let i = 0; i < atoms1.length; i++) {
+                    let found = false;
+                    
+                    for (let j = 0; j < atoms2.length; j++) {
+                        if (matched.has(j)) continue;
+                        
+                        if (atoms1[i].equals(atoms2[j])) {
+                            matched.add(j);
+                            found = true;
+                            break;
+                        }
+                        
+                        const inverted = Atom.invert(atoms1[i]);
+                        if (inverted.equals(atoms2[j])) {
+                            cost += 1;
+                            matched.add(j);
+                            found = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!found) return -1;
+                }
+                
+                return cost;
+            }
+            
+            checkAnchoredOverlap(premise1, premise2) {
+                const letters1 = premise1.getLetters();
+                const letters2 = premise2.getLetters();
+                
+                let overlap = 0;
+                for (const letter of letters1) {
+                    if (letters2.has(letter)) overlap++;
+                }
+                
+                return overlap >= 2;
+            }
+            
+            checkConjunctiveParity(premise1, premise2) {
+                const letters1 = Array.from(premise1.getLetters()).sort();
+                const letters2 = Array.from(premise2.getLetters()).sort();
+                
+                if (letters1.length !== letters2.length) return false;
+                
+                for (let i = 0; i < letters1.length; i++) {
+                    if (letters1[i] !== letters2[i]) return false;
+                }
+                
+                return true;
+            }
+            
+            checkNonDerivability(step1, step2) {
+                const middleStart = step1 + 1;
+                const middleEnd = step2 - 1;
+                
+                if (middleEnd < middleStart) return true;
+                
+                const middleConstraints = this.state.getConstraintsInRange(middleStart, middleEnd);
+                
+                return middleConstraints.length < 3;
+            }
+            
+            checkAxisOrthogonality(atoms) {
+                const pairMap = new Map();
+                
+                [...this.state.getWindowConstraints(), ...atoms].forEach(atom => {
+                    const key1 = `${atom.head},${atom.tail}`;
+                    const key2 = `${atom.tail},${atom.head}`;
+                    
+                    if (!pairMap.has(key1)) pairMap.set(key1, new Set());
+                    if (!pairMap.has(key2)) pairMap.set(key2, new Set());
+                    
+                    pairMap.get(key1).add(atom.axis);
+                    
+                    const invAxis = {'N':'S','S':'N','E':'W','W':'E'}[atom.axis];
+                    pairMap.get(key2).add(invAxis);
+                });
+                
+                for (const [_, axes] of pairMap) {
+                    if (axes.has('N') && axes.has('S')) return false;
+                    if (axes.has('E') && axes.has('W')) return false;
+                }
+                
+                return true;
+            }
+            
+            isValidMatch(premise1, premise2, step1, step2) {
+                if (!this.checkNoIdentity(premise1, premise2)) {
+                    return { valid: false, reason: 'Identity match (Rule 2)' };
+                }
+                
+                const cost = this.computeTransformationCost(premise1, premise2);
+                if (cost < 1) {
+                    return { valid: false, reason: 'Insufficient transformation cost (Rule 3)' };
+                }
+                
+                if (!this.checkAnchoredOverlap(premise1, premise2)) {
+                    return { valid: false, reason: 'Insufficient letter overlap (Rule 5)' };
+                }
+                
+                if (premise1.atoms.length > 1) {
+                    if (!this.checkConjunctiveParity(premise1, premise2)) {
+                        return { valid: false, reason: 'Conjunctive parity violation (Rule 7)' };
+                    }
+                }
+                
+                if (!this.checkNonDerivability(step1, step2)) {
+                    return { valid: false, reason: 'Derivable from middle window (Rule 8)' };
+                }
+                
+                return { valid: true, cost, reason: 'Valid match' };
+            }
+        }
+
+        // ============================================================================
+        // PREMISE GENERATOR
+        // ============================================================================
+        class PremiseGenerator {
+            constructor(state, solver, ruleChecker) {
+                this.state = state;
+                this.solver = solver;
+                this.ruleChecker = ruleChecker;
+                this.matchSchedule = [];
+                this.lastRhythm = [];
+            }
+            
+            scheduleMatches(totalSteps, n) {
+                this.matchSchedule = [];
+                
+                for (let step = n; step < totalSteps; step++) {
+                    const targetRate = 0.5;
+                    const variance = 0.1;
+                    const probability = targetRate + (this.state.rng.next() - 0.5) * variance * 2;
+                    
+                    const shouldMatch = this.state.rng.next() < probability;
+                    this.matchSchedule[step] = shouldMatch;
+                }
+                
+                this.breakRhythm();
+                this.balanceMatches(n, totalSteps);
+            }
+            
+            breakRhythm() {
+                for (let period = 2; period <= 6; period++) {
+                    let isRhythmic = true;
+                    let startIdx = -1;
+                    
+                    for (let i = period; i < this.matchSchedule.length; i++) {
+                        if (this.matchSchedule[i] === this.matchSchedule[i - period]) {
+                            if (startIdx === -1) startIdx = i;
+                        } else {
+                            isRhythmic = false;
+                            break;
+                        }
+                    }
+                    
+                    if (isRhythmic && startIdx !== -1) {
+                        for (let i = startIdx; i < this.matchSchedule.length; i += period) {
+                            if (this.state.rng.next() < 0.3) {
+                                this.matchSchedule[i] = !this.matchSchedule[i];
+                            }
+                        }
+                    }
+                }
+            }
+            
+            balanceMatches(n, totalSteps) {
+                let matchCount = 0;
+                for (let i = n; i < totalSteps; i++) {
+                    if (this.matchSchedule[i]) matchCount++;
+                }
+                
+                const total = totalSteps - n;
+                const matchRate = matchCount / total;
+                
+                if (matchRate < 0.4) {
+                    const needed = Math.ceil(total * 0.4) - matchCount;
+                    let added = 0;
+                    for (let i = n; i < totalSteps && added < needed; i++) {
+                        if (!this.matchSchedule[i] && this.state.rng.next() < 0.5) {
+                            this.matchSchedule[i] = true;
+                            added++;
+                        }
+                    }
+                } else if (matchRate > 0.6) {
+                    const excess = matchCount - Math.floor(total * 0.6);
+                    let removed = 0;
+                    for (let i = n; i < totalSteps && removed < excess; i++) {
+                        if (this.matchSchedule[i] && this.state.rng.next() < 0.5) {
+                            this.matchSchedule[i] = false;
+                            removed++;
+                        }
+                    }
+                }
+            }
+            
+            generatePremise(k, n, shouldMatch = false, previousPremise = null) {
+                const maxRetries = 30;
+                
+                for (let attempt = 0; attempt < maxRetries; attempt++) {
+                    let atoms;
+                    
+                    if (shouldMatch && previousPremise) {
+                        atoms = this.generateMatchingPremise(previousPremise, k);
+                    } else {
+                        atoms = this.generateRandomPremise(k, n);
+                    }
+                    
+                    if (!atoms) continue;
+                    
+                    if (!this.ruleChecker.checkWindowSatisfiability(atoms)) {
+                        continue;
+                    }
+                    
+                    if (!this.ruleChecker.checkAxisOrthogonality(atoms)) {
+                        continue;
+                    }
+                    
+                    if (shouldMatch && previousPremise) {
+                        const newPremise = new Premise(atoms);
+                        const matchCheck = this.ruleChecker.isValidMatch(
+                            previousPremise,
+                            newPremise,
+                            this.state.currentStep - n,
+                            this.state.currentStep
+                        );
+                        
+                        if (!matchCheck.valid) {
+                            continue;
+                        }
+                    }
+                    
+                    return atoms;
+                }
+                
+                return null;
+            }
+            
+            generateRandomPremise(k, n) {
+                const windowLetters = new Set();
+                const windowConstraints = this.state.getWindowConstraints();
+                windowConstraints.forEach(atom => {
+                    windowLetters.add(atom.head);
+                    windowLetters.add(atom.tail);
+                });
+                
+                const nBackConstraints = this.state.constraintStore.find(
+                    c => c.step === this.state.currentStep - n
+                );
+                const nBackLetters = new Set();
+                if (nBackConstraints) {
+                    nBackConstraints.atoms.forEach(atom => {
+                        nBackLetters.add(atom.head);
+                        nBackLetters.add(atom.tail);
+                    });
+                }
+                
+                const minLetters = k + 1;
+                const maxLetters = Math.min(6, 2 * k + 2);
+                const numLetters = this.state.rng.nextInt(minLetters, maxLetters);
+                
+                const availableLetters = this.state.rng.shuffle(this.state.letters);
+                const selectedLetters = [];
+                
+                let overlap = 0;
+                if (nBackLetters.size > 0) {
+                    const nBackArray = Array.from(nBackLetters);
+                    const targetOverlap = Math.min(2, nBackArray.length);
+                    
+                    for (let i = 0; i < targetOverlap && overlap < targetOverlap; i++) {
+                        if (this.state.rng.next() < 0.6) {
+                            selectedLetters.push(nBackArray[i]);
+                            overlap++;
+                        }
+                    }
+                }
+                
+                for (const letter of availableLetters) {
+                    if (selectedLetters.length >= numLetters) break;
+                    if (!selectedLetters.includes(letter)) {
+                        selectedLetters.push(letter);
+                    }
+                }
+                
+                if (selectedLetters.length < minLetters) return null;
+                
+                this.state.ensureCoordinates(selectedLetters);
+                
+                const atoms = [];
+                const usedPairs = new Set();
+                const axes = ['N', 'S', 'E', 'W'];
+                
+                for (let i = 0; i < k; i++) {
+                    let attempts = 0;
+                    while (attempts < 20) {
+                        const head = this.state.rng.choice(selectedLetters);
+                        const tail = this.state.rng.choice(selectedLetters.filter(l => l !== head));
+                        
+                        if (!tail) break;
+                        
+                        const pairKey = [head, tail].sort().join(',');
+                        if (usedPairs.has(pairKey)) {
+                            attempts++;
+                            continue;
+                        }
+                        
+                        const axis = this.state.rng.choice(axes);
+                        const atom = new Atom(axis, head, tail);
+                        
+                        atoms.push(atom);
+                        usedPairs.add(pairKey);
+                        break;
+                    }
+                }
+                
+                return atoms.length === k ? atoms : null;
+            }
+            
+            generateMatchingPremise(previousPremise, k) {
+                const atoms = previousPremise.atoms.map(atom => {
+                    if (this.state.rng.next() < 0.8) {
+                        return Atom.invert(atom);
+                    }
+                    return new Atom(atom.axis, atom.head, atom.tail);
+                });
+                
+                return atoms;
+            }
+        }
+
+        // ============================================================================
+        // VOICE SYNTHESIS - SINGLE FEMININE VOICE, SMOOTH PROSODY
+        // ============================================================================
+        class VoiceSynthesis {
+            constructor() {
+                this.synth = window.speechSynthesis;
+                this.VOX = null;
+                this.voiceReady = false;
+                this.pitch = 1.15;
+                this.rate = 0.95;
+                this.volume = 1.0;
+                
+                this.speechQueue = [];
+                this.isSpeaking = false;
+                this.hasVoicesChangedFired = false;
+            }
+            
+            async initialize() {
+                return new Promise((resolve) => {
+                    const attemptSelection = () => {
+                        const voices = this.synth.getVoices();
+                        
+                        if (voices.length > 0 && !this.VOX) {
+                            this.selectFeminineVoice(voices);
+                            
+                            if (this.VOX) {
+                                console.log(`🎙️ Selected voice: ${this.VOX.name} (${this.VOX.lang})`);
+                                this.voiceReady = true;
+                                
+                                try {
+                                    localStorage.setItem('relational-nback-voice', this.VOX.name);
+                                } catch (e) {
+                                    console.warn('Could not persist voice to localStorage');
+                                }
+                                
+                                resolve();
+                            }
+                        }
+                    };
+                    
+                    attemptSelection();
+                    
+                    if (!this.voiceReady && !this.hasVoicesChangedFired) {
+                        this.synth.onvoiceschanged = () => {
+                            if (!this.hasVoicesChangedFired) {
+                                this.hasVoicesChangedFired = true;
+                                attemptSelection();
+                                this.synth.onvoiceschanged = null;
+                            }
+                        };
+                    }
+                    
+                    setTimeout(() => {
+                        if (!this.voiceReady) {
+                            console.warn('Voice selection timeout - using fallback');
+                            const voices = this.synth.getVoices();
+                            if (voices.length > 0) {
+                                this.VOX = voices[0];
+                                this.voiceReady = true;
+                                console.log(`⚠️ Fallback voice: ${this.VOX.name}`);
+                            }
+                            resolve();
+                        }
+                    }, 2000);
+                });
+            }
+            
+            selectFeminineVoice(voices) {
+                const storedVoiceName = localStorage.getItem('relational-nback-voice');
+                if (storedVoiceName) {
+                    const stored = voices.find(v => v.name === storedVoiceName);
+                    if (stored) {
+                        this.VOX = stored;
+                        return;
+                    }
+                }
+                
+                const localePreferences = ['en-AU', 'en-GB', 'en-US'];
+                
+                const femininePriority = [
+                    'Aria', 'Jenny', 'Sonia', 'Natasha', 'Neural', 'Online (Natural)',
+                    'Samantha', 'Karen', 'Tessa', 'Serena',
+                    'Google UK English Female', 'Google US English'
+                ];
+                
+                for (const locale of localePreferences) {
+                    const localeVoices = voices.filter(v => v.lang.startsWith(locale));
+                    
+                    for (const namePattern of femininePriority) {
+                        const match = localeVoices.find(v => v.name.includes(namePattern));
+                        if (match) {
+                            this.VOX = match;
+                            return;
+                        }
+                    }
+                    
+                    const femaleVoice = localeVoices.find(v => 
+                        v.name.toLowerCase().includes('female') ||
+                        /\b(alice|allison|amy|anna|bella|claire|emily|emma|grace|helen|julia|kate|linda|lisa|mary|melissa|michelle|nancy|olivia|rachel|rebecca|ruth|sarah|sophia|susan|victoria)\b/i.test(v.name)
+                    );
+                    
+                    if (femaleVoice) {
+                        this.VOX = femaleVoice;
+                        return;
+                    }
+                    
+                    if (localeVoices.length > 0) {
+                        this.VOX = localeVoices[0];
+                        return;
+                    }
+                }
+                
+                if (voices.length > 0) {
+                    this.VOX = voices[0];
+                }
+            }
+            
+            getVoiceInfo() {
+                if (!this.VOX) return 'Voice not initialized';
+                return `${this.VOX.name} (${this.VOX.lang})`;
+            }
+            
+            async speak(text) {
+                return new Promise((resolve) => {
+                    this.speechQueue.push({ text, resolve });
+                    this.processQueue();
+                });
+            }
+            
+            async processQueue() {
+                if (this.isSpeaking || this.speechQueue.length === 0) {
+                    return;
+                }
+                
+                this.isSpeaking = true;
+                const { text, resolve } = this.speechQueue.shift();
+                
+                await this.speakSingle(text);
+                
+                resolve();
+                this.isSpeaking = false;
+                
+                setTimeout(() => {
+                    this.processQueue();
+                }, 100);
+            }
+            
+            async speakSingle(text) {
+                return new Promise((resolve) => {
+                    if (!this.VOX) {
+                        console.error('VOX not initialized');
+                        resolve();
+                        return;
+                    }
+                    
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.voice = this.VOX;
+                    utterance.lang = this.VOX.lang;
+                    utterance.rate = this.rate;
+                    utterance.pitch = this.pitch;
+                    utterance.volume = this.volume;
+                    
+                    utterance.onend = () => {
+                        resolve();
+                    };
+                    
+                    utterance.onerror = (event) => {
+                        console.error('Speech synthesis error:', event);
+                        resolve();
+                    };
+                    
+                    this.synth.speak(utterance);
+                });
+            }
+            
+            async speakPremise(premise) {
+                const text = premise.toNaturalSpeech();
+                await this.speak(text);
+            }
+            
+            cancel() {
+                this.synth.cancel();
+                
+                setTimeout(() => {
+                    this.speechQueue = [];
+                    this.isSpeaking = false;
+                }, 100);
+            }
+            
+            async cancelAndWait() {
+                this.synth.cancel();
+                this.speechQueue = [];
+                this.isSpeaking = false;
+                
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            setRate(rate) {
+                this.rate = Math.max(0.85, Math.min(1.05, rate));
+            }
+            
+            adaptRate(avgResponseTime) {
+                if (avgResponseTime > 4000) {
+                    this.setRate(this.rate - 0.05);
+                } else if (avgResponseTime < 2000) {
+                    this.setRate(this.rate + 0.05);
+                }
+            }
+        }
+
+        // ============================================================================
+        // GAME ENGINE
+        // ============================================================================
+        class GameEngine {
+            constructor() {
+                this.state = null;
+                this.solver = null;
+                this.ruleChecker = null;
+                this.generator = null;
+                this.voice = new VoiceSynthesis();
+                
+                this.isRunning = false;
+                this.isPaused = false;
+                this.n = 2;
+                this.k = 1;
+                this.totalTrials = 50;
+                this.currentTrial = 0;
+                
+                this.trialHistory = [];
+                this.recentAccuracy = [];
+                this.M = 20;
+                
+                this.score = 0;
+                this.correctResponses = 0;
+                this.totalResponses = 0;
+                
+                this.premises = [];
+                this.lastPremise = null;
+                this.awaitingResponse = false;
+                this.responseStartTime = 0;
+                this.lastReplayUsed = false;
+                
+                this.transitivityEnabled = false;
+            }
+            
+            async initialize(n, k, transitivityEnabled = false) {
+                this.n = n;
+                this.k = k;
+                this.transitivityEnabled = transitivityEnabled;
+                
+                this.state = new GameState(Date.now());
+                this.solver = new ConstraintSolver(this.state);
+                this.ruleChecker = new RuleChecker(this.state, this.solver, transitivityEnabled);
+                this.generator = new PremiseGenerator(this.state, this.solver, this.ruleChecker);
+                
+                this.generator.scheduleMatches(this.totalTrials, this.n);
+                
+                this.currentTrial = 0;
+                this.premises = [];
+                this.trialHistory = [];
+                this.score = 0;
+                this.correctResponses = 0;
+                this.totalResponses = 0;
+                this.recentAccuracy = [];
+            }
+            
+            async start() {
+                this.isRunning = true;
+                this.isPaused = false;
+                this.updateUI();
+                
+                while (this.currentTrial < this.totalTrials && this.isRunning) {
+                    if (this.isPaused) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        continue;
+                    }
+                    
+                    await this.runTrial();
+                    this.currentTrial++;
+                }
+                
+                if (this.isRunning) {
+                    this.endGame();
+                }
+            }
+            
+            async runTrial() {
+                const shouldMatch = this.currentTrial >= this.n && 
+                                   this.generator.matchSchedule[this.currentTrial];
+                
+                const previousPremise = this.currentTrial >= this.n ? 
+                                       this.premises[this.currentTrial - this.n] : null;
+                
+                const atoms = this.generator.generatePremise(
+                    this.k,
+                    this.n,
+                    shouldMatch,
+                    previousPremise
+                );
+                
+                if (!atoms) {
+                    console.log('Failed to generate valid premise for trial', this.currentTrial);
+                    return;
+                }
+                
+                const premise = new Premise(atoms);
+                this.premises.push(premise);
+                this.state.addToConstraintStore(atoms);
+                this.state.currentStep++;
+                
+                document.getElementById('premise-display').textContent = premise.toString();
+                
+                this.lastPremise = premise;
+                this.lastReplayUsed = false;
+                await this.voice.speakPremise(premise);
+                
+                this.awaitingResponse = true;
+                this.responseStartTime = Date.now();
+                
+                const response = await this.waitForResponse();
+                
+                this.awaitingResponse = false;
+                
+                const isActualMatch = this.checkIfMatch(this.currentTrial);
+                const correct = response === isActualMatch;
+                
+                if (correct) {
+                    this.score++;
+                    this.correctResponses++;
+                }
+                this.totalResponses++;
+                
+                const rt = Date.now() - this.responseStartTime;
+                this.recordTrial({
+                    trial: this.currentTrial,
+                    n: this.n,
+                    k: this.k,
+                    premise: premise.toString(),
+                    plannedMatch: shouldMatch,
+                    actualMatch: isActualMatch,
+                    response: response,
+                    correct: correct,
+                    rt: rt,
+                    replayUsed: this.lastReplayUsed
+                });
+                
+                this.showFeedback(correct);
+                
+                this.recentAccuracy.push(correct ? 1 : 0);
+                if (this.recentAccuracy.length > this.M) {
+                    this.recentAccuracy.shift();
+                }
+                
+                if (this.recentAccuracy.length >= this.M && this.currentTrial % this.M === 0) {
+                    this.adaptDifficulty();
+                }
+                
+                this.updateUI();
+                
+                const medianRT = this.calculateMedianRT();
+                const interTrialInterval = Math.min(1400, Math.max(1000, medianRT * 0.3));
+                await new Promise(resolve => setTimeout(resolve, interTrialInterval));
+                document.getElementById('feedback').textContent = '';
+            }
+            
+            checkIfMatch(currentTrialIndex) {
+                if (currentTrialIndex < this.n) return false;
+                
+                const currentPremise = this.premises[currentTrialIndex];
+                const nBackPremise = this.premises[currentTrialIndex - this.n];
+                
+                const matchCheck = this.ruleChecker.isValidMatch(
+                    nBackPremise,
+                    currentPremise,
+                    currentTrialIndex - this.n,
+                    currentTrialIndex
+                );
+                
+                return matchCheck.valid;
+            }
+            
+            waitForResponse() {
+                return new Promise((resolve) => {
+                    this.responseResolver = resolve;
+                    
+                    document.getElementById('match-btn').disabled = false;
+                    document.getElementById('no-match-btn').disabled = false;
+                    document.getElementById('repeat-btn').disabled = false;
+                    
+                    const medianRT = this.calculateMedianRT();
+                    const timeout = Math.max(8000, medianRT * 3.5);
+                    
+                    this.responseTimeout = setTimeout(() => {
+                        if (this.responseResolver) {
+                            this.responseResolver(null);
+                            this.responseResolver = null;
+                        }
+                    }, timeout);
+                });
+            }
+            
+            handleResponse(isMatch) {
+                if (!this.awaitingResponse || !this.responseResolver) return;
+                
+                clearTimeout(this.responseTimeout);
+                
+                document.getElementById('match-btn').disabled = true;
+                document.getElementById('no-match-btn').disabled = true;
+                document.getElementById('repeat-btn').disabled = true;
+                
+                this.responseResolver(isMatch);
+                this.responseResolver = null;
+            }
+            
+            async handleRepeat() {
+                if (!this.awaitingResponse || !this.lastPremise) return;
+                if (this.lastReplayUsed) return;
+                
+                this.lastReplayUsed = true;
+                
+                await this.voice.cancelAndWait();
+                await this.voice.speakPremise(this.lastPremise);
+            }
+            
+            calculateMedianRT() {
+                const rts = this.trialHistory
+                    .filter(t => t.rt && t.response !== null)
+                    .map(t => t.rt)
+                    .sort((a, b) => a - b);
+                
+                if (rts.length === 0) return 3000;
+                
+                const mid = Math.floor(rts.length / 2);
+                return rts.length % 2 === 0 ? (rts[mid - 1] + rts[mid]) / 2 : rts[mid];
+            }
+            
+            adaptDifficulty() {
+                const acc = this.recentAccuracy.reduce((a, b) => a + b, 0) / this.recentAccuracy.length;
+                
+                if (this.recentAccuracy.length >= this.M * 2) {
+                    const window1 = this.recentAccuracy.slice(-this.M * 2, -this.M);
+                    const window2 = this.recentAccuracy.slice(-this.M);
+                    
+                    const acc1 = window1.reduce((a, b) => a + b) / window1.length;
+                    const acc2 = window2.reduce((a, b) => a + b) / window2.length;
+                    
+                    if (acc1 >= 0.85 && acc2 >= 0.85) {
+                        if (this.k < 4) {
+                            this.k++;
+                            console.log('Increasing k to', this.k);
+                        } else if (this.n < 5) {
+                            this.n++;
+                            console.log('Increasing n to', this.n);
+                            this.generator.scheduleMatches(this.totalTrials - this.currentTrial, this.n);
+                        }
+                    } else if (acc1 <= 0.65 && acc2 <= 0.65) {
+                        if (this.k > 1) {
+                            this.k--;
+                            console.log('Decreasing k to', this.k);
+                        } else if (this.n > 1) {
+                            this.n--;
+                            console.log('Decreasing n to', this.n);
+                            this.generator.scheduleMatches(this.totalTrials - this.currentTrial, this.n);
+                        }
+                    }
+                }
+                
+                const avgRT = this.calculateMedianRT();
+                this.voice.adaptRate(avgRT);
+            }
+            
+            recordTrial(data) {
+                this.trialHistory.push(data);
+                this.updateDebugPanel();
+            }
+            
+            showFeedback(correct) {
+                const feedback = document.getElementById('feedback');
+                feedback.textContent = correct ? '✓ Correct!' : '✗ Incorrect';
+                feedback.className = 'feedback ' + (correct ? 'correct' : 'incorrect');
+            }
+            
+            updateUI() {
+                document.getElementById('trial-count').textContent = this.currentTrial;
+                document.getElementById('score').textContent = this.score;
+                
+                const accuracy = this.totalResponses > 0 ? 
+                    (this.correctResponses / this.totalResponses * 100).toFixed(1) : '-';
+                document.getElementById('accuracy').textContent = accuracy + '%';
+                
+                const rollingAcc = this.recentAccuracy.length > 0 ?
+                    (this.recentAccuracy.reduce((a, b) => a + b, 0) / this.recentAccuracy.length * 100).toFixed(1) : '-';
+                document.getElementById('rolling-acc').textContent = rollingAcc + '%';
+                
+                document.getElementById('n-slider').value = this.n;
+                document.getElementById('n-value').textContent = this.n;
+                document.getElementById('k-slider').value = this.k;
+                document.getElementById('k-value').textContent = this.k;
+            }
+            
+            updateDebugPanel() {
+                if (!document.getElementById('debug').hidden) {
+                    const content = document.getElementById('debug-content');
+                    const lastN = this.premises.slice(-Math.min(this.n + 2, this.premises.length));
+                    
+                    content.innerHTML = lastN.map((premise, idx) => {
+                        const stepNum = this.premises.length - lastN.length + idx;
+                        return `<div class="debug-premise">
+                            <strong>Step ${stepNum}:</strong> ${premise.toKey()}
+                        </div>`;
+                    }).join('');
+                }
+            }
+            
+            pause() {
+                this.isPaused = true;
+                this.voice.cancel();
+            }
+            
+            resume() {
+                this.isPaused = false;
+            }
+            
+            stop() {
+                this.isRunning = false;
+                this.voice.cancel();
+            }
+            
+            endGame() {
+                this.isRunning = false;
+                document.getElementById('status').textContent = 'Game Complete!';
+                document.getElementById('start-btn').disabled = false;
+                document.getElementById('pause-btn').disabled = true;
+            }
+            
+            exportData() {
+                const data = {
+                    seed: this.state.seed,
+                    voice: this.voice.getVoiceInfo(),
+                    n: this.n,
+                    k: this.k,
+                    totalTrials: this.totalTrials,
+                    score: this.score,
+                    accuracy: this.correctResponses / this.totalResponses,
+                    trials: this.trialHistory
+                };
+                
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `relational-nback-${Date.now()}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+        }
+
+        // ============================================================================
+        // TESTING HARNESS
+        // ============================================================================
+        class TestHarness {
+            constructor() {
+                this.results = [];
+            }
+            
+            async runTests() {
+                this.results = [];
+                
+                await this.testSATSolver();
+                await this.testNoIdentity();
+                await this.testTransformationCost();
+                await this.testAnchoredOverlap();
+                await this.testConjunctiveParity();
+                await this.testAxisOrthogonality();
+                await this.testNonPeriodicSchedule();
+                
+                return this.results;
+            }
+            
+            async testSATSolver() {
+                const state = new GameState(12345);
+                const solver = new ConstraintSolver(state);
+                
+                state.coordinates.set('A', {x: 0, y: 0});
+                state.coordinates.set('B', {x: 0, y: 1});
+                
+                const atoms1 = [new Atom('N', 'B', 'A')];
+                const sat1 = solver.isSatisfiable(atoms1);
+                
+                this.results.push({
+                    test: 'SAT Solver - Satisfiable',
+                    passed: sat1,
+                    details: 'B north of A with B at (0,1), A at (0,0)'
+                });
+                
+                const atoms2 = [
+                    new Atom('N', 'A', 'B'),
+                    new Atom('S', 'A', 'B')
+                ];
+                const sat2 = solver.isSatisfiable(atoms2);
+                
+                this.results.push({
+                    test: 'SAT Solver - Unsatisfiable',
+                    passed: !sat2,
+                    details: 'A cannot be both north and south of B'
+                });
+            }
+            
+            async testNoIdentity() {
+                const p1 = new Premise([new Atom('N', 'A', 'B')]);
+                const p2 = new Premise([new Atom('N', 'A', 'B')]);
+                const p3 = new Premise([new Atom('S', 'B', 'A')]);
+                
+                const state = new GameState(12345);
+                const solver = new ConstraintSolver(state);
+                const checker = new RuleChecker(state, solver);
+                
+                const identity = checker.checkNoIdentity(p1, p2);
+                const different = checker.checkNoIdentity(p1, p3);
+                
+                this.results.push({
+                    test: 'Rule 2 - No Identity',
+                    passed: !identity && different,
+                    details: 'Identical premises rejected, different premises accepted'
+                });
+            }
+            
+            async testTransformationCost() {
+                const p1 = new Premise([new Atom('N', 'A', 'B')]);
+                const p2 = new Premise([new Atom('N', 'A', 'B')]);
+                const p3 = new Premise([new Atom('S', 'B', 'A')]);
+                
+                const state = new GameState(12345);
+                const solver = new ConstraintSolver(state);
+                const checker = new RuleChecker(state, solver);
+                
+                const cost1 = checker.computeTransformationCost(p1, p2);
+                const cost2 = checker.computeTransformationCost(p1, p3);
+                
+                this.results.push({
+                    test: 'Rule 3 - Transformation Cost',
+                    passed: cost1 === 0 && cost2 === 1,
+                    details: `Identity cost=${cost1}, Inversion cost=${cost2}`
+                });
+            }
+            
+            async testAnchoredOverlap() {
+                const p1 = new Premise([new Atom('N', 'A', 'B')]);
+                const p2 = new Premise([new Atom('S', 'B', 'A')]);
+                const p3 = new Premise([new Atom('N', 'C', 'D')]);
+                
+                const state = new GameState(12345);
+                const solver = new ConstraintSolver(state);
+                const checker = new RuleChecker(state, solver);
+                
+                const overlap1 = checker.checkAnchoredOverlap(p1, p2);
+                const overlap2 = checker.checkAnchoredOverlap(p1, p3);
+                
+                this.results.push({
+                    test: 'Rule 5 - Anchored Overlap',
+                    passed: overlap1 && !overlap2,
+                    details: 'Same letters accepted, different letters rejected'
+                });
+            }
+            
+            async testConjunctiveParity() {
+                const p1 = new Premise([
+                    new Atom('N', 'A', 'B'),
+                    new Atom('E', 'A', 'C')
+                ]);
+                const p2 = new Premise([
+                    new Atom('S', 'B', 'A'),
+                    new Atom('W', 'C', 'A')
+                ]);
+                const p3 = new Premise([
+                    new Atom('S', 'B', 'A'),
+                    new Atom('W', 'D', 'A')
+                ]);
+                
+                const state = new GameState(12345);
+                const solver = new ConstraintSolver(state);
+                const checker = new RuleChecker(state, solver);
+                
+                const parity1 = checker.checkConjunctiveParity(p1, p2);
+                const parity2 = checker.checkConjunctiveParity(p1, p3);
+                
+                this.results.push({
+                    test: 'Rule 7 - Conjunctive Parity',
+                    passed: parity1 && !parity2,
+                    details: 'Same letters accepted, partial overlap rejected'
+                });
+            }
+            
+            async testAxisOrthogonality() {
+                const state = new GameState(12345);
+                const solver = new ConstraintSolver(state);
+                const checker = new RuleChecker(state, solver);
+                
+                const atoms1 = [new Atom('N', 'A', 'B')];
+                const orthog1 = checker.checkAxisOrthogonality(atoms1);
+                
+                state.addToConstraintStore([new Atom('N', 'A', 'B')]);
+                const atoms2 = [new Atom('S', 'A', 'B')];
+                const orthog2 = checker.checkAxisOrthogonality(atoms2);
+                
+                this.results.push({
+                    test: 'Rule 4 - Axis Orthogonality',
+                    passed: orthog1 && !orthog2,
+                    details: 'Single direction OK, contradicting directions rejected'
+                });
+            }
+            
+            async testNonPeriodicSchedule() {
+                const state = new GameState(12345);
+                const solver = new ConstraintSolver(state);
+                const checker = new RuleChecker(state, solver);
+                const generator = new PremiseGenerator(state, solver, checker);
+                
+                generator.scheduleMatches(100, 2);
+                
+                let isPeriodic = false;
+                for (let period = 2; period <= 10; period++) {
+                    let matches = 0;
+                    for (let i = period; i < generator.matchSchedule.length; i++) {
+                        if (generator.matchSchedule[i] === generator.matchSchedule[i - period]) {
+                            matches++;
+                        }
+                    }
+                    if (matches > generator.matchSchedule.length * 0.8) {
+                        isPeriodic = true;
+                        break;
+                    }
+                }
+                
+                this.results.push({
+                    test: 'Rule 9 - Non-Periodic Schedule',
+                    passed: !isPeriodic,
+                    details: 'Match schedule is not obviously periodic'
+                });
+            }
+        }
+
+        // ============================================================================
+        // UI INITIALIZATION
+        // ============================================================================
+        
+        const engine = new GameEngine();
+        
+        async function initializeApp() {
+            document.getElementById('status').textContent = 'Initializing voice...';
+            
+            await engine.voice.initialize();
+            
+            document.getElementById('voice-info').innerHTML = 
+                `<strong>Voice:</strong> ${engine.voice.getVoiceInfo()}`;
+            
+            document.getElementById('status').textContent = 'Ready to start';
+            document.getElementById('start-btn').disabled = false;
+        }
+        
+        initializeApp();
+        
+        document.getElementById('n-slider').addEventListener('input', (e) => {
+            document.getElementById('n-value').textContent = e.target.value;
+        });
+        
+        document.getElementById('k-slider').addEventListener('input', (e) => {
+            document.getElementById('k-value').textContent = e.target.value;
+        });
+        
+        document.getElementById('rate-slider').addEventListener('input', (e) => {
+            const rate = parseFloat(e.target.value);
+            document.getElementById('rate-value').textContent = rate.toFixed(2);
+            engine.voice.setRate(rate);
+        });
+        
+        document.getElementById('debug-toggle').addEventListener('change', (e) => {
+            document.getElementById('debug').hidden = !e.target.checked;
+            if (e.target.checked) {
+                engine.updateDebugPanel();
+            }
+        });
+        
+        document.getElementById('transitivity-toggle').addEventListener('change', (e) => {
+            engine.transitivityEnabled = e.target.checked;
+        });
+        
+        document.getElementById('start-btn').addEventListener('click', async () => {
+            const n = parseInt(document.getElementById('n-slider').value);
+            const k = parseInt(document.getElementById('k-slider').value);
+            const transitivity = document.getElementById('transitivity-toggle').checked;
+            
+            document.getElementById('start-btn').disabled = true;
+            document.getElementById('pause-btn').disabled = false;
+            document.getElementById('status').textContent = 'Initializing...';
+            
+            await engine.initialize(n, k, transitivity);
+            
+            document.getElementById('status').textContent = 'Running...';
+            document.getElementById('feedback').textContent = '';
+            
+            engine.start();
+        });
+        
+        document.getElementById('pause-btn').addEventListener('click', () => {
+            if (engine.isPaused) {
+                engine.resume();
+                document.getElementById('pause-btn').textContent = 'Pause';
+            } else {
+                engine.pause();
+                document.getElementById('pause-btn').textContent = 'Resume';
+            }
+        });
+        
+        document.getElementById('repeat-btn').addEventListener('click', () => {
+            engine.handleRepeat();
+        });
+        
+        document.getElementById('match-btn').addEventListener('click', () => {
+            engine.handleResponse(true);
+        });
+        
+        document.getElementById('no-match-btn').addEventListener('click', () => {
+            engine.handleResponse(false);
+        });
+        
+        document.getElementById('preview-btn').addEventListener('click', async () => {
+            const previewPremise = new Premise([
+                new Atom('N', 'A', 'B'),
+                new Atom('W', 'A', 'C')
+            ]);
+            
+            await engine.voice.cancelAndWait();
+            await engine.voice.speakPremise(previewPremise);
+        });
+        
+        document.addEventListener('keydown', (e) => {
+            if (!engine.awaitingResponse) return;
+            
+            if (e.code === 'Space') {
+                e.preventDefault();
+                engine.handleResponse(true);
+            } else if (e.code === 'Enter') {
+                e.preventDefault();
+                engine.handleResponse(false);
+            }
+        });
+        
+        document.getElementById('export-btn').addEventListener('click', () => {
+            engine.exportData();
+        });
+        
+        document.getElementById('test-btn').addEventListener('click', async () => {
+            const testPanel = document.getElementById('test-panel');
+            const testResults = document.getElementById('test-results');
+            
+            testPanel.hidden = false;
+            testResults.innerHTML = '<p>Running tests...</p>';
+            
+            const harness = new TestHarness();
+            const results = await harness.runTests();
+            
+            testResults.innerHTML = results.map(r => {
+                const className = r.passed ? 'pass' : 'fail';
+                const symbol = r.passed ? '✓' : '✗';
+                return `<div class="test-result ${className}">
+                    ${symbol} ${r.test}: ${r.details}
+                </div>`;
+            }).join('');
+        });
+    </script>
+</body>
+</html>
