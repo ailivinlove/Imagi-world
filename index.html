@@ -318,6 +318,25 @@
             outline-offset: 2px;
         }
 
+        .voice-info {
+            background: #0f3460;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            color: #aaa;
+            margin-top: 10px;
+        }
+
+        .voice-info strong {
+            color: #e94560;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
         .test-panel {
             background: #0a0e1a;
             padding: 20px;
@@ -351,30 +370,11 @@
             font-style: italic;
         }
 
-        .voice-info {
-            background: #0f3460;
-            padding: 10px;
-            border-radius: 6px;
-            font-size: 0.9rem;
-            color: #aaa;
-            margin-top: 10px;
-        }
-
-        .voice-info strong {
-            color: #e94560;
-        }
-
-        .button-group {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
         @media (max-width: 600px) {
             .stats {
                 grid-template-columns: 1fr 1fr;
             }
-            
+
             .response-buttons {
                 flex-direction: column;
             }
@@ -384,18 +384,18 @@
 <body>
     <div class="container">
         <h1>🌀Imagi-world🌀</h1>
-        
+
         <div class="controls">
             <div class="control-group">
                 <label>N-Back Level: <span class="range-value" id="n-value">2</span></label>
                 <input type="range" id="n-slider" min="1" max="5" value="2">
             </div>
-            
+
             <div class="control-group">
                 <label>Atoms per Premise (k): <span class="range-value" id="k-value">1</span></label>
                 <input type="range" id="k-slider" min="1" max="4" value="1">
             </div>
-            
+
             <div class="control-group">
                 <label>Seconds per Trial: <span class="range-value" id="spt-value">6.0</span> s</label>
                 <div class="dual-control">
@@ -403,24 +403,30 @@
                     <input type="number" id="spt-number" min="2" max="20" step="0.5" value="6.0">
                 </div>
             </div>
-            
+
             <div class="control-group checkbox-group">
                 <input type="checkbox" id="transitivity-toggle">
                 <label for="transitivity-toggle" style="margin-bottom: 0;">Enable Advanced Transitivity</label>
             </div>
-            
+
+            <div class="control-group checkbox-group">
+                <input type="checkbox" id="lock-seed-toggle">
+                <label for="lock-seed-toggle" style="margin-bottom: 0;">Lock seed (reuse until unlocked)</label>
+            </div>
+
             <div class="control-group checkbox-group">
                 <input type="checkbox" id="reset-seed-toggle">
-                <label for="reset-seed-toggle" style="margin-bottom: 0;">Reset Seed & Logs on Restart</label>
+                <label for="reset-seed-toggle" style="margin-bottom: 0;">Reset stats & logs on Restart</label>
             </div>
-            
+
             <div class="control-group checkbox-group">
                 <input type="checkbox" id="debug-toggle">
                 <label for="debug-toggle" style="margin-bottom: 0;">Show Debug Panel</label>
             </div>
-            
+
             <div style="margin-top: 20px;">
                 <div class="button-group">
+                    <button id="start-btn" class="success">Start</button>
                     <button id="restart-btn" class="success" disabled>Restart</button>
                     <button id="stop-btn" class="danger" disabled>Stop</button>
                     <button id="repeat-btn" class="secondary" disabled>Repeat Audio</button>
@@ -431,14 +437,14 @@
                     <button id="export-btn" class="secondary">Export Data</button>
                 </div>
             </div>
-            
+
             <div class="voice-info" id="voice-info">Initializing voice...</div>
         </div>
-        
+
         <div class="game-area">
             <div class="status" id="status">Preparing voice system...</div>
             <div class="premise-display" id="premise-display"></div>
-            
+
             <div class="response-buttons">
                 <button class="match-btn" id="match-btn" disabled>
                     MATCH<br><small>(Spacebar)</small>
@@ -447,9 +453,9 @@
                     NO MATCH<br><small>(Enter)</small>
                 </button>
             </div>
-            
+
             <div class="feedback" id="feedback"></div>
-            
+
             <div class="stats">
                 <div class="stat-box">
                     <div class="stat-label">Trial</div>
@@ -467,14 +473,18 @@
                     <div class="stat-label">Rolling Acc.</div>
                     <div class="stat-value" id="rolling-acc">-</div>
                 </div>
+                <div class="stat-box">
+                    <div class="stat-label">Omissions</div>
+                    <div class="stat-value" id="omissions">0</div>
+                </div>
             </div>
         </div>
-        
+
         <div id="debug" hidden>
             <h3>Debug Panel - Last Premises</h3>
             <div id="debug-content"></div>
         </div>
-        
+
         <div id="test-panel" class="test-panel" hidden>
             <h3>Test Results</h3>
             <div id="test-results"></div>
@@ -482,24 +492,59 @@
     </div>
 
     <script type="module">
-        // ============================================================================
-        // DETERMINISTIC RNG
-        // ============================================================================
-        class RNG {
-            constructor(seed = Date.now()) {
-                this.seed = seed >>> 0;
+        const RELATION_WORDS = { N: 'north of', S: 'south of', E: 'east of', W: 'west of' };
+        const MATCH_AXES = ['N', 'S', 'E', 'W'];
+        const ACCEPTANCE_ALPHA = 0.25;
+        const ACCEPTANCE_BETA = 0.5;
+        const FIRST_N_NOVELTY = 6;
+        const HAMMING_WINDOW = 8;
+        const NOVELTY_OVERRIDE_THRESHOLD = 30;
+        const MAX_GENERATION_ATTEMPTS = 240;
+
+        function cryptoRandom32() {
+            if (window.crypto && window.crypto.getRandomValues) {
+                const arr = new Uint32Array(1);
+                window.crypto.getRandomValues(arr);
+                return arr[0] >>> 0;
+            }
+
+            let x = Date.now() ^ Math.floor(Math.random() * 0xffffffff);
+            x ^= x << 13;
+            x ^= x >>> 17;
+            x ^= x << 5;
+            return x >>> 0;
+        }
+
+        function fnv1aHash(parts) {
+            let hash = 0x811c9dc5;
+            for (const part of parts) {
+                const value = (part >>> 0);
+                hash ^= value;
+                hash = Math.imul(hash, 0x01000193);
+            }
+            return hash >>> 0;
+        }
+
+        class Mulberry32 {
+            constructor(seed) {
                 this.state = seed >>> 0;
             }
-            
+
             next() {
-                this.state = (this.state * 1664525 + 1013904223) >>> 0;
-                return this.state / 0x100000000;
+                let t = this.state += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
             }
-            
+
             nextInt(min, max) {
                 return Math.floor(this.next() * (max - min + 1)) + min;
             }
-            
+
+            choice(array) {
+                return array[Math.floor(this.next() * array.length)];
+            }
+
             shuffle(array) {
                 const arr = [...array];
                 for (let i = arr.length - 1; i > 0; i--) {
@@ -508,116 +553,138 @@
                 }
                 return arr;
             }
-            
-            choice(array) {
-                return array[Math.floor(this.next() * array.length)];
+
+            weightedChoice(items, weights) {
+                const cumulative = [];
+                let total = 0;
+                for (const weight of weights) {
+                    total += weight;
+                    cumulative.push(total);
+                }
+                const r = this.next() * total;
+                for (let i = 0; i < cumulative.length; i++) {
+                    if (r <= cumulative[i]) return items[i];
+                }
+                return items[items.length - 1];
+            }
+
+            nextBetween(min, max) {
+                return min + (max - min) * this.next();
             }
         }
 
-        // ============================================================================
-        // STATE MANAGEMENT
-        // ============================================================================
-        class GameState {
-            constructor(seed) {
-                this.rng = new RNG(seed);
-                this.seed = seed;
-                this.letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-                this.coordinates = new Map();
-                this.constraintStore = [];
-                this.currentStep = 0;
-                this.W = 7;
-                this.letterQuotas = { head: new Set(), tail: new Set() };
-                this.lastMatchStep = -100;
-                this.recentLetterUse = new Map();
-                
-                this.initializeCoordinates();
+        class SeedManager {
+            constructor() {
+                this.runCounterKey = 'relational-nback-run-counter';
+                this.seedKey = 'relational-nback-last-seed';
+                this.lockKey = 'relational-nback-lock-seed';
+                this.sessionSeed = null;
+                this.runCounter = this.loadRunCounter();
             }
-            
-            initializeCoordinates() {
-                const initialLetters = this.rng.shuffle(this.letters).slice(0, 12);
-                initialLetters.forEach(letter => {
-                    this.coordinates.set(letter, {
-                        x: this.rng.nextInt(-5, 5),
-                        y: this.rng.nextInt(-5, 5)
-                    });
-                });
+
+            loadRunCounter() {
+                const raw = localStorage.getItem(this.runCounterKey);
+                const parsed = raw ? parseInt(raw, 10) : 0;
+                return Number.isFinite(parsed) ? parsed : 0;
             }
-            
-            ensureCoordinates(letters) {
-                letters.forEach(letter => {
-                    if (!this.coordinates.has(letter)) {
-                        let attempts = 0;
-                        while (attempts < 50) {
-                            const coord = {
-                                x: this.rng.nextInt(-5, 5),
-                                y: this.rng.nextInt(-5, 5)
-                            };
-                            
-                            let taken = false;
-                            for (const [_, c] of this.coordinates) {
-                                if (c.x === coord.x && c.y === coord.y) {
-                                    taken = true;
-                                    break;
-                                }
-                            }
-                            
-                            if (!taken) {
-                                this.coordinates.set(letter, coord);
-                                return;
-                            }
-                            attempts++;
-                        }
-                        
-                        this.coordinates.set(letter, {
-                            x: this.rng.nextInt(-8, 8),
-                            y: this.rng.nextInt(-8, 8)
-                        });
+
+            getLockPreference() {
+                return localStorage.getItem(this.lockKey) === 'true';
+            }
+
+            setLockPreference(lock) {
+                localStorage.setItem(this.lockKey, lock ? 'true' : 'false');
+            }
+
+            incrementRunCounter() {
+                this.runCounter += 1;
+                localStorage.setItem(this.runCounterKey, String(this.runCounter));
+                return this.runCounter;
+            }
+
+            generateSessionSeed(lockSeed) {
+                if (lockSeed) {
+                    const existing = localStorage.getItem(this.seedKey);
+                    if (existing) {
+                        this.sessionSeed = parseInt(existing, 10) >>> 0;
+                        return this.sessionSeed;
                     }
-                });
+                }
+
+                const counter = this.incrementRunCounter();
+                const random = cryptoRandom32();
+                const salt = Date.now() >>> 0;
+                const seed = fnv1aHash([counter, random, salt]);
+                this.sessionSeed = seed;
+                localStorage.setItem(this.seedKey, String(seed));
+                return seed;
             }
-            
-            addToConstraintStore(atoms) {
-                this.constraintStore.push({ step: this.currentStep, atoms });
-                
-                const cutoff = this.currentStep - this.W;
-                this.constraintStore = this.constraintStore.filter(c => c.step > cutoff);
-                
-                atoms.forEach(atom => {
-                    this.letterQuotas.head.add(atom.head);
-                    this.letterQuotas.tail.add(atom.tail);
-                });
-            }
-            
-            getWindowConstraints() {
-                return this.constraintStore.flatMap(c => c.atoms);
-            }
-            
-            getConstraintsInRange(startStep, endStep) {
-                return this.constraintStore
-                    .filter(c => c.step >= startStep && c.step <= endStep)
-                    .flatMap(c => c.atoms);
+
+            persistSessionSeed(seed) {
+                this.sessionSeed = seed;
+                localStorage.setItem(this.seedKey, String(seed));
             }
         }
 
-        // ============================================================================
-        // CANONICAL ATOM REPRESENTATION
-        // ============================================================================
-        const RELATION_WORDS = { 'N': 'north of', 'S': 'south of', 'E': 'east of', 'W': 'west of' };
-
-        // Hidden configuration flag: toggle to true once at startup if semicolons create
-        // unnaturally long pauses on the target speech engine.
-        const useCommaJoinerIfSemicolonsAreLong = false;
-
-        function buildPremiseString(atoms, joiner) {
-            if (!atoms || atoms.length === 0) {
-                return '';
+        class DisjointSet {
+            constructor(elements = []) {
+                this.parent = new Map();
+                this.rank = new Map();
+                elements.forEach(e => this.makeSet(e));
             }
 
-            const phrase = atoms
-                .map(atom => `${atom.head} is ${RELATION_WORDS[atom.axis]} ${atom.tail}`)
-                .join(joiner);
+            makeSet(x) {
+                if (!this.parent.has(x)) {
+                    this.parent.set(x, x);
+                    this.rank.set(x, 0);
+                }
+            }
 
-            return `${phrase}.`;
+            find(x) {
+                if (!this.parent.has(x)) {
+                    this.makeSet(x);
+                }
+                const parent = this.parent.get(x);
+                if (parent !== x) {
+                    const root = this.find(parent);
+                    this.parent.set(x, root);
+                    return root;
+                }
+                return x;
+            }
+
+            union(x, y) {
+                const rootX = this.find(x);
+                const rootY = this.find(y);
+                if (rootX === rootY) return rootX;
+
+                const rankX = this.rank.get(rootX) || 0;
+                const rankY = this.rank.get(rootY) || 0;
+
+                if (rankX < rankY) {
+                    this.parent.set(rootX, rootY);
+                    return rootY;
+                } else if (rankX > rankY) {
+                    this.parent.set(rootY, rootX);
+                    return rootX;
+                } else {
+                    this.parent.set(rootY, rootX);
+                    this.rank.set(rootX, rankX + 1);
+                    return rootX;
+                }
+            }
+
+            getSets() {
+                const result = new Map();
+                for (const key of this.parent.keys()) {
+                    const root = this.find(key);
+                    if (!result.has(root)) {
+                        result.set(root, new Set());
+                    }
+                    result.get(root).add(key);
+                }
+                return result;
+            }
         }
 
         class Atom {
@@ -626,45 +693,34 @@
                 this.head = head;
                 this.tail = tail;
             }
-            
-            static invert(atom) {
-                const invMap = { 'N': 'S', 'S': 'N', 'E': 'W', 'W': 'E' };
-                return new Atom(invMap[atom.axis], atom.tail, atom.head);
-            }
-            
+
             equals(other) {
-                return this.axis === other.axis && 
-                       this.head === other.head && 
-                       this.tail === other.tail;
+                return this.axis === other.axis && this.head === other.head && this.tail === other.tail;
             }
-            
+
             toString() {
                 return `${this.head} is ${RELATION_WORDS[this.axis]} ${this.tail}`;
             }
-            
+
             toKey() {
                 return `${this.axis},${this.head},${this.tail}`;
             }
-            
-            static fromKey(key) {
-                const [axis, head, tail] = key.split(',');
-                return new Atom(axis, head, tail);
+
+            static invert(atom) {
+                const invMap = { N: 'S', S: 'N', E: 'W', W: 'E' };
+                return new Atom(invMap[atom.axis], atom.tail, atom.head);
             }
         }
 
         class Premise {
             constructor(atoms) {
-                this.atoms = this.canonicalize(atoms);
-            }
-            
-            canonicalize(atoms) {
-                return [...atoms].sort((a, b) => {
+                this.atoms = [...atoms].sort((a, b) => {
                     if (a.axis !== b.axis) return a.axis.localeCompare(b.axis);
                     if (a.head !== b.head) return a.head.localeCompare(b.head);
                     return a.tail.localeCompare(b.tail);
                 });
             }
-            
+
             getLetters() {
                 const letters = new Set();
                 this.atoms.forEach(atom => {
@@ -673,1514 +729,1484 @@
                 });
                 return letters;
             }
-            
+
+            atomKeys() {
+                return this.atoms.map(atom => atom.toKey());
+            }
+
+            toKey() {
+                return this.atomKeys().join('|');
+            }
+
             toString() {
                 return this.atoms.map(a => a.toString()).join('; ');
             }
-            
-            toKey() {
-                return this.atoms.map(a => a.toKey()).join('|');
-            }
-            
+
             toNaturalSpeech() {
-                const joiner = useCommaJoinerIfSemicolonsAreLong ? ', ' : '; ';
-                return buildPremiseString(this.atoms, joiner);
+                return this.atoms.map(atom => `${atom.head} is ${RELATION_WORDS[atom.axis]} ${atom.tail}`).join('; ') + '.';
+            }
+
+            mirrorKey() {
+                const canonicalAtoms = this.atoms.map(atom => {
+                    const inverted = Atom.invert(atom);
+                    const current = `${atom.axis}|${atom.head}|${atom.tail}`;
+                    const flipped = `${inverted.axis}|${inverted.head}|${inverted.tail}`;
+                    return current < flipped ? current : flipped;
+                }).sort();
+                return canonicalAtoms.join('|');
+            }
+
+            isoSignature() {
+                const letterMap = new Map();
+                let nextCharCode = 'a'.charCodeAt(0);
+                const normalized = this.atoms.map(atom => {
+                    if (!letterMap.has(atom.head)) {
+                        letterMap.set(atom.head, String.fromCharCode(nextCharCode++));
+                    }
+                    if (!letterMap.has(atom.tail)) {
+                        letterMap.set(atom.tail, String.fromCharCode(nextCharCode++));
+                    }
+                    const headNorm = letterMap.get(atom.head);
+                    const tailNorm = letterMap.get(atom.tail);
+                    const normalizedAtom = new Atom(atom.axis, headNorm, tailNorm);
+                    const inverted = Atom.invert(normalizedAtom);
+                    const keyCurrent = `${normalizedAtom.axis}|${normalizedAtom.head}|${normalizedAtom.tail}`;
+                    const keyInv = `${inverted.axis}|${inverted.head}|${inverted.tail}`;
+                    return keyCurrent < keyInv ? keyCurrent : keyInv;
+                });
+                return normalized.sort().join('|');
             }
         }
 
-        // ============================================================================
-        // CONSTRAINT SATISFACTION SOLVER
-        // ============================================================================
-        class ConstraintSolver {
-            constructor(state) {
-                this.state = state;
+        class NoveltyManager {
+            constructor(windowSize = HAMMING_WINDOW, firstN = FIRST_N_NOVELTY) {
+                this.windowSize = windowSize;
+                this.firstN = firstN;
+                this.seenExact = new Set();
+                this.seenMirror = new Set();
+                this.seenIso = new Set();
+                this.history = [];
             }
-            
-            isSatisfiable(atoms) {
-                const letters = new Set();
-                atoms.forEach(atom => {
-                    letters.add(atom.head);
-                    letters.add(atom.tail);
-                });
-                
-                const constraints = [];
-                atoms.forEach(atom => {
-                    constraints.push({
-                        axis: atom.axis,
-                        head: atom.head,
-                        tail: atom.tail
+
+            buildSignatures(premise) {
+                return {
+                    exact: premise.toKey(),
+                    mirror: premise.mirrorKey(),
+                    iso: premise.isoSignature(),
+                    atoms: premise.atomKeys()
+                };
+            }
+
+            computeHamming(atoms) {
+                if (this.history.length === 0) return this.windowSize;
+                const freq1 = this.buildFrequencyMap(atoms);
+                let total = 0;
+                const limit = Math.min(this.windowSize, this.history.length);
+                for (let i = 0; i < limit; i++) {
+                    const other = this.history[this.history.length - 1 - i];
+                    const freq2 = other.frequency;
+                    const allKeys = new Set([...freq1.keys(), ...freq2.keys()]);
+                    let diff = 0;
+                    allKeys.forEach(key => {
+                        diff += Math.abs((freq1.get(key) || 0) - (freq2.get(key) || 0));
                     });
-                });
-                
-                for (let i = 0; i < constraints.length; i++) {
-                    for (let j = i + 1; j < constraints.length; j++) {
-                        const c1 = constraints[i];
-                        const c2 = constraints[j];
-                        
-                        if ((c1.head === c2.head && c1.tail === c2.tail) ||
-                            (c1.head === c2.tail && c1.tail === c2.head)) {
-                            
-                            if (c1.axis === 'N' || c1.axis === 'S') {
-                                if (c2.axis === 'N' || c2.axis === 'S') {
-                                    if (c1.head === c2.head && c1.tail === c2.tail && c1.axis !== c2.axis) {
-                                        return false;
-                                    }
-                                    if (c1.head === c2.tail && c1.tail === c2.head && c1.axis === c2.axis) {
-                                        return false;
-                                    }
-                                }
-                            }
-                            
-                            if (c1.axis === 'E' || c1.axis === 'W') {
-                                if (c2.axis === 'E' || c2.axis === 'W') {
-                                    if (c1.head === c2.head && c1.tail === c2.tail && c1.axis !== c2.axis) {
-                                        return false;
-                                    }
-                                    if (c1.head === c2.tail && c1.tail === c2.head && c1.axis === c2.axis) {
-                                        return false;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    total += diff;
                 }
-                
-                const assignment = new Map(this.state.coordinates);
-                
-                letters.forEach(letter => {
-                    if (!assignment.has(letter)) {
-                        assignment.set(letter, { x: 0, y: 0 });
-                    }
-                });
-                
-                return this.tryAssignment(Array.from(letters), constraints, assignment, 0);
+                return total / limit;
             }
-            
-            tryAssignment(letters, constraints, assignment, depth) {
-                if (depth > 100) return true;
-                
-                for (const c of constraints) {
-                    const headCoord = assignment.get(c.head);
-                    const tailCoord = assignment.get(c.tail);
-                    
-                    if (!headCoord || !tailCoord) continue;
-                    
-                    let satisfied = false;
-                    switch (c.axis) {
-                        case 'N':
-                            satisfied = headCoord.y > tailCoord.y && headCoord.x === tailCoord.x;
-                            break;
-                        case 'S':
-                            satisfied = headCoord.y < tailCoord.y && headCoord.x === tailCoord.x;
-                            break;
-                        case 'E':
-                            satisfied = headCoord.x > tailCoord.x && headCoord.y === tailCoord.y;
-                            break;
-                        case 'W':
-                            satisfied = headCoord.x < tailCoord.x && headCoord.y === tailCoord.y;
-                            break;
-                    }
-                    
-                    if (!satisfied) {
-                        if (depth < 50) {
-                            const newAssignment = new Map(assignment);
-                            
-                            const hc = {...headCoord};
-                            const tc = {...tailCoord};
-                            
-                            switch (c.axis) {
-                                case 'N':
-                                    hc.x = tc.x;
-                                    hc.y = tc.y + 1;
-                                    break;
-                                case 'S':
-                                    hc.x = tc.x;
-                                    hc.y = tc.y - 1;
-                                    break;
-                                case 'E':
-                                    hc.y = tc.y;
-                                    hc.x = tc.x + 1;
-                                    break;
-                                case 'W':
-                                    hc.y = tc.y;
-                                    hc.x = tc.x - 1;
-                                    break;
-                            }
-                            
-                            newAssignment.set(c.head, hc);
-                            
-                            if (this.tryAssignment(letters, constraints, newAssignment, depth + 1)) {
-                                newAssignment.forEach((coord, letter) => {
-                                    this.state.coordinates.set(letter, coord);
-                                });
-                                return true;
-                            }
-                        }
-                        return false;
-                    }
+
+            buildFrequencyMap(atoms) {
+                const freq = new Map();
+                atoms.forEach(key => {
+                    freq.set(key, (freq.get(key) || 0) + 1);
+                });
+                return freq;
+            }
+
+            evaluate(premise, signatures, trialIndex) {
+                const exactHit = this.seenExact.has(signatures.exact);
+                if (exactHit) {
+                    return {
+                        blocked: true,
+                        reason: 'exact-repeat',
+                        penalty: Infinity,
+                        noveltyScores: { exact: 1, mirror: 0, iso: 0, hamming: 0 }
+                    };
                 }
-                
-                return true;
+
+                const mirrorHit = this.seenMirror.has(signatures.mirror);
+                const isoHit = this.seenIso.has(signatures.iso);
+                const hamming = this.computeHamming(signatures.atoms);
+
+                const noveltyScores = {
+                    exact: mirrorHit ? 1 : 0,
+                    mirror: mirrorHit ? 1 : 0,
+                    iso: isoHit ? 1 : 0,
+                    hamming
+                };
+
+                if (trialIndex < this.firstN && (mirrorHit || isoHit)) {
+                    return {
+                        blocked: true,
+                        reason: 'novelty-mode',
+                        penalty: Infinity,
+                        noveltyScores
+                    };
+                }
+
+                let penalty = 0;
+                if (mirrorHit) penalty += 1;
+                if (isoHit) penalty += 2;
+
+                return {
+                    blocked: false,
+                    penalty,
+                    noveltyScores
+                };
+            }
+
+            register(signatures) {
+                this.seenExact.add(signatures.exact);
+                this.seenMirror.add(signatures.mirror);
+                this.seenIso.add(signatures.iso);
+                this.history.push({
+                    signature: signatures.exact,
+                    frequency: this.buildFrequencyMap(signatures.atoms)
+                });
+                if (this.history.length > this.windowSize) {
+                    this.history.shift();
+                }
+            }
+
+            reset() {
+                this.seenExact.clear();
+                this.seenMirror.clear();
+                this.seenIso.clear();
+                this.history = [];
             }
         }
 
-        // ============================================================================
-        // RULE CHECKER
-        // ============================================================================
-        class RuleChecker {
-            constructor(state, solver, transitivityEnabled = false) {
-                this.state = state;
-                this.solver = solver;
+        class LetterPoolManager {
+            constructor(allLetters, rng, usageTracker) {
+                this.allLetters = allLetters;
+                this.rng = rng;
+                this.usageTracker = usageTracker;
+                this.currentPool = [];
+            }
+
+            getUsage(letter) {
+                const usage = this.usageTracker.get(letter);
+                if (!usage) return 0;
+                return usage.head + usage.tail;
+            }
+
+            sampleLetters(count, candidates = this.allLetters) {
+                const available = candidates.filter(l => !this.currentPool.includes(l));
+                const selection = [];
+                const pool = [...available];
+                while (selection.length < count && pool.length > 0) {
+                    const weights = pool.map(letter => 1 / (1 + this.getUsage(letter)));
+                    const choice = this.rng.weightedChoice(pool, weights);
+                    selection.push(choice);
+                    const index = pool.indexOf(choice);
+                    pool.splice(index, 1);
+                }
+                return selection;
+            }
+
+            nextPool(k, options = {}) {
+                const { expand = false } = options;
+                const min = k + 1;
+                const max = Math.min(6, 2 * k + 2);
+                const targetSize = Math.max(min, Math.min(max, (this.currentPool.length || min) + (expand ? 1 : 0)));
+
+                if (this.currentPool.length === 0) {
+                    const letters = this.rng.shuffle(this.allLetters).slice(0, targetSize);
+                    this.currentPool = letters;
+                    return this.currentPool;
+                }
+
+                const drift = expand ? 0.5 : this.rng.nextBetween(0.3, 0.5);
+                const keepCount = Math.max(min, Math.round(targetSize * (1 - drift)));
+                const orderedByUsage = [...this.currentPool].sort((a, b) => this.getUsage(a) - this.getUsage(b));
+                const keep = orderedByUsage.slice(0, keepCount);
+                const needed = targetSize - keep.length;
+                const candidates = this.allLetters.filter(letter => !keep.includes(letter));
+                const additions = this.sampleLetters(needed, candidates);
+                this.currentPool = this.rng.shuffle([...keep, ...additions]);
+                return this.currentPool;
+            }
+        }
+
+        function collectLetters(atoms) {
+            const set = new Set();
+            atoms.forEach(atom => {
+                set.add(atom.head);
+                set.add(atom.tail);
+            });
+            return set;
+        }
+
+        function addEdge(map, from, to) {
+            if (!map.has(from)) {
+                map.set(from, new Set());
+            }
+            map.get(from).add(to);
+        }
+
+        function topologicalAssign(nodes, edges) {
+            const indegree = new Map();
+            nodes.forEach(node => indegree.set(node, 0));
+            edges.forEach((targets, source) => {
+                targets.forEach(target => {
+                    indegree.set(target, (indegree.get(target) || 0) + 1);
+                });
+            });
+
+            const queue = [];
+            indegree.forEach((degree, node) => {
+                if (degree === 0) queue.push(node);
+            });
+
+            const order = [];
+            while (queue.length > 0) {
+                const node = queue.shift();
+                order.push(node);
+                const neighbors = edges.get(node);
+                if (!neighbors) continue;
+                neighbors.forEach(neighbor => {
+                    indegree.set(neighbor, indegree.get(neighbor) - 1);
+                    if (indegree.get(neighbor) === 0) {
+                        queue.push(neighbor);
+                    }
+                });
+            }
+
+            if (order.length !== nodes.length) {
+                return { cycle: true, values: new Map() };
+            }
+
+            const values = new Map();
+            order.forEach(node => {
+                if (!values.has(node)) values.set(node, 0);
+                const base = values.get(node);
+                const neighbors = edges.get(node);
+                if (!neighbors) return;
+                neighbors.forEach(neighbor => {
+                    const current = values.get(neighbor) || 0;
+                    const candidate = Math.max(current, base + 1);
+                    values.set(neighbor, candidate);
+                });
+            });
+
+            nodes.forEach(node => {
+                if (!values.has(node)) values.set(node, 0);
+            });
+
+            return { cycle: false, values };
+        }
+
+        function buildReachability(nodes, edges) {
+            const reach = new Map();
+            nodes.forEach(node => {
+                const visited = new Set();
+                const stack = [node];
+                while (stack.length) {
+                    const current = stack.pop();
+                    const neighbors = edges.get(current);
+                    if (!neighbors) continue;
+                    neighbors.forEach(next => {
+                        if (!visited.has(next)) {
+                            visited.add(next);
+                            stack.push(next);
+                        }
+                    });
+                }
+                reach.set(node, visited);
+            });
+            return reach;
+        }
+
+        class ConstraintSolver {
+            analyze(allAtoms) {
+                const letters = collectLetters(allAtoms);
+                const ufX = new DisjointSet(letters);
+                const ufY = new DisjointSet(letters);
+
+                const graphX = new Map();
+                const graphY = new Map();
+
+                for (const atom of allAtoms) {
+                    if (atom.axis === 'N' || atom.axis === 'S') {
+                        ufX.union(atom.head, atom.tail);
+                    } else {
+                        ufY.union(atom.head, atom.tail);
+                    }
+                }
+
+                for (const atom of allAtoms) {
+                    if (atom.axis === 'N') {
+                        const lesser = ufY.find(atom.tail);
+                        const greater = ufY.find(atom.head);
+                        if (lesser === greater) {
+                            return { ok: false, reason: 'vertical-collision' };
+                        }
+                        addEdge(graphY, lesser, greater);
+                    } else if (atom.axis === 'S') {
+                        const lesser = ufY.find(atom.head);
+                        const greater = ufY.find(atom.tail);
+                        if (lesser === greater) {
+                            return { ok: false, reason: 'vertical-collision' };
+                        }
+                        addEdge(graphY, lesser, greater);
+                    } else if (atom.axis === 'E') {
+                        const lesser = ufX.find(atom.tail);
+                        const greater = ufX.find(atom.head);
+                        if (lesser === greater) {
+                            return { ok: false, reason: 'horizontal-collision' };
+                        }
+                        addEdge(graphX, lesser, greater);
+                    } else if (atom.axis === 'W') {
+                        const lesser = ufX.find(atom.head);
+                        const greater = ufX.find(atom.tail);
+                        if (lesser === greater) {
+                            return { ok: false, reason: 'horizontal-collision' };
+                        }
+                        addEdge(graphX, lesser, greater);
+                    }
+                }
+
+                const nodesX = Array.from(new Set([...graphX.keys(), ...Array.from(graphX.values()).flat()]));
+                ufX.parent.forEach((_, letter) => nodesX.push(ufX.find(letter)));
+                const uniqueNodesX = Array.from(new Set(nodesX));
+
+                const nodesY = Array.from(new Set([...graphY.keys(), ...Array.from(graphY.values()).flat()]));
+                ufY.parent.forEach((_, letter) => nodesY.push(ufY.find(letter)));
+                const uniqueNodesY = Array.from(new Set(nodesY));
+
+                const assignX = topologicalAssign(uniqueNodesX, graphX);
+                if (assignX.cycle) {
+                    return { ok: false, reason: 'horizontal-cycle' };
+                }
+
+                const assignY = topologicalAssign(uniqueNodesY, graphY);
+                if (assignY.cycle) {
+                    return { ok: false, reason: 'vertical-cycle' };
+                }
+
+                const coordinates = new Map();
+                letters.forEach(letter => {
+                    const xRep = ufX.find(letter);
+                    const yRep = ufY.find(letter);
+                    const x = assignX.values.get(xRep) || 0;
+                    const y = assignY.values.get(yRep) || 0;
+                    coordinates.set(letter, { x, y });
+                });
+
+                return {
+                    ok: true,
+                    coordinates,
+                    ufX,
+                    ufY,
+                    graphX,
+                    graphY,
+                    nodesX: uniqueNodesX,
+                    nodesY: uniqueNodesY
+                };
+            }
+
+            evaluate(windowAtoms, candidateAtoms) {
+                return this.analyze([...windowAtoms, ...candidateAtoms]);
+            }
+        }
+
+        class EquivalenceEngine {
+            constructor(transitivityEnabled = false) {
                 this.transitivityEnabled = transitivityEnabled;
             }
-            
-            checkWindowSatisfiability(newAtoms) {
-                const allConstraints = [...this.state.getWindowConstraints(), ...newAtoms];
-                return this.solver.isSatisfiable(allConstraints);
+
+            setTransitivity(enabled) {
+                this.transitivityEnabled = enabled;
             }
-            
-            checkNoIdentity(premise1, premise2) {
-                return premise1.toKey() !== premise2.toKey();
-            }
-            
-            computeTransformationCost(premise1, premise2) {
-                let cost = 0;
-                
-                const atoms1 = [...premise1.atoms];
-                const atoms2 = [...premise2.atoms];
-                
-                if (atoms1.length !== atoms2.length) return -1;
-                
-                const matched = new Set();
-                
-                for (let i = 0; i < atoms1.length; i++) {
-                    let found = false;
-                    
-                    for (let j = 0; j < atoms2.length; j++) {
-                        if (matched.has(j)) continue;
-                        
-                        if (atoms1[i].equals(atoms2[j])) {
-                            matched.add(j);
-                            found = true;
-                            break;
+
+            computeCertificate(nBackPremise, candidatePremise, midAtoms) {
+                if (!nBackPremise) {
+                    return { match: false, reason: 'no-nback' };
+                }
+
+                if (nBackPremise.toKey() === candidatePremise.toKey()) {
+                    return { match: false, reason: 'identity' };
+                }
+
+                const atomsA = nBackPremise.atoms;
+                const atomsB = candidatePremise.atoms;
+                if (atomsA.length !== atomsB.length) {
+                    return { match: false, reason: 'arity-mismatch' };
+                }
+
+                const lettersA = Array.from(nBackPremise.getLetters()).sort();
+                const lettersB = Array.from(candidatePremise.getLetters()).sort();
+                if (lettersA.length !== lettersB.length) {
+                    return { match: false, reason: 'letter-cardinality' };
+                }
+
+                for (let i = 0; i < lettersA.length; i++) {
+                    if (lettersA[i] !== lettersB[i]) {
+                        return { match: false, reason: 'letter-parity' };
+                    }
+                }
+
+                const sharedLetters = lettersA.filter(letter => lettersB.includes(letter));
+                if (sharedLetters.length < 2) {
+                    return { match: false, reason: 'anchor-failure' };
+                }
+
+                const mapping = [];
+                const used = new Set();
+
+                const search = (index) => {
+                    if (index === atomsA.length) return true;
+                    for (let j = 0; j < atomsB.length; j++) {
+                        if (used.has(j)) continue;
+                        if (atomsA[index].equals(atomsB[j])) {
+                            used.add(j);
+                            mapping.push({ from: atomsA[index].toKey(), to: atomsB[j].toKey(), inverted: false });
+                            if (search(index + 1)) return true;
+                            mapping.pop();
+                            used.delete(j);
                         }
-                        
-                        const inverted = Atom.invert(atoms1[i]);
-                        if (inverted.equals(atoms2[j])) {
-                            cost += 1;
-                            matched.add(j);
-                            found = true;
+                        const inverted = Atom.invert(atomsA[index]);
+                        if (inverted.equals(atomsB[j])) {
+                            used.add(j);
+                            mapping.push({ from: atomsA[index].toKey(), to: atomsB[j].toKey(), inverted: true });
+                            if (search(index + 1)) return true;
+                            mapping.pop();
+                            used.delete(j);
+                        }
+                    }
+                    return false;
+                };
+
+                const isInvertible = search(0);
+                if (!isInvertible) {
+                    return { match: false, reason: 'no-invertible-mapping' };
+                }
+
+                const midAnalysis = midAtoms.length > 0 ? new ConstraintSolver().analyze(midAtoms) : { ok: true, ufX: new DisjointSet(), ufY: new DisjointSet(), graphX: new Map(), graphY: new Map(), nodesX: [], nodesY: [] };
+                let midDerivable = false;
+
+                if (midAnalysis.ok) {
+                    const reachX = buildReachability(midAnalysis.nodesX, midAnalysis.graphX);
+                    const reachY = buildReachability(midAnalysis.nodesY, midAnalysis.graphY);
+
+                    const checkDerivable = (atom) => {
+                        if (atom.axis === 'N') {
+                            const lesser = midAnalysis.ufY.find(atom.tail);
+                            const greater = midAnalysis.ufY.find(atom.head);
+                            const reach = reachY.get(lesser);
+                            return reach ? reach.has(greater) : false;
+                        }
+                        if (atom.axis === 'S') {
+                            const lesser = midAnalysis.ufY.find(atom.head);
+                            const greater = midAnalysis.ufY.find(atom.tail);
+                            const reach = reachY.get(lesser);
+                            return reach ? reach.has(greater) : false;
+                        }
+                        if (atom.axis === 'E') {
+                            const lesser = midAnalysis.ufX.find(atom.tail);
+                            const greater = midAnalysis.ufX.find(atom.head);
+                            const reach = reachX.get(lesser);
+                            return reach ? reach.has(greater) : false;
+                        }
+                        if (atom.axis === 'W') {
+                            const lesser = midAnalysis.ufX.find(atom.head);
+                            const greater = midAnalysis.ufX.find(atom.tail);
+                            const reach = reachX.get(lesser);
+                            return reach ? reach.has(greater) : false;
+                        }
+                        return false;
+                    };
+
+                    for (const atom of atomsA) {
+                        if (checkDerivable(atom) || checkDerivable(Atom.invert(atom))) {
+                            midDerivable = true;
                             break;
                         }
                     }
-                    
-                    if (!found) return -1;
                 }
-                
-                return cost;
-            }
-            
-            checkAnchoredOverlap(premise1, premise2) {
-                const letters1 = premise1.getLetters();
-                const letters2 = premise2.getLetters();
-                
-                let overlap = 0;
-                for (const letter of letters1) {
-                    if (letters2.has(letter)) overlap++;
+
+                if (midDerivable && !this.transitivityEnabled) {
+                    return { match: false, reason: 'mid-derivable', midWindowDerivable: true };
                 }
-                
-                return overlap >= 2;
-            }
-            
-            checkConjunctiveParity(premise1, premise2) {
-                const letters1 = Array.from(premise1.getLetters()).sort();
-                const letters2 = Array.from(premise2.getLetters()).sort();
-                
-                if (letters1.length !== letters2.length) return false;
-                
-                for (let i = 0; i < letters1.length; i++) {
-                    if (letters1[i] !== letters2[i]) return false;
-                }
-                
-                return true;
-            }
-            
-            checkNonDerivability(step1, step2) {
-                const middleStart = step1 + 1;
-                const middleEnd = step2 - 1;
-                
-                if (middleEnd < middleStart) return true;
-                
-                const middleConstraints = this.state.getConstraintsInRange(middleStart, middleEnd);
-                
-                return middleConstraints.length < 3;
-            }
-            
-            checkAxisOrthogonality(atoms) {
-                const pairMap = new Map();
-                
-                [...this.state.getWindowConstraints(), ...atoms].forEach(atom => {
-                    const key1 = `${atom.head},${atom.tail}`;
-                    const key2 = `${atom.tail},${atom.head}`;
-                    
-                    if (!pairMap.has(key1)) pairMap.set(key1, new Set());
-                    if (!pairMap.has(key2)) pairMap.set(key2, new Set());
-                    
-                    pairMap.get(key1).add(atom.axis);
-                    
-                    const invAxis = {'N':'S','S':'N','E':'W','W':'E'}[atom.axis];
-                    pairMap.get(key2).add(invAxis);
-                });
-                
-                for (const [_, axes] of pairMap) {
-                    if (axes.has('N') && axes.has('S')) return false;
-                    if (axes.has('E') && axes.has('W')) return false;
-                }
-                
-                return true;
-            }
-            
-            isValidMatch(premise1, premise2, step1, step2) {
-                if (!this.checkNoIdentity(premise1, premise2)) {
-                    return { valid: false, reason: 'Identity match (Rule 2)' };
-                }
-                
-                const cost = this.computeTransformationCost(premise1, premise2);
-                if (cost < 1) {
-                    return { valid: false, reason: 'Insufficient transformation cost (Rule 3)' };
-                }
-                
-                if (!this.checkAnchoredOverlap(premise1, premise2)) {
-                    return { valid: false, reason: 'Insufficient letter overlap (Rule 5)' };
-                }
-                
-                if (premise1.atoms.length > 1) {
-                    if (!this.checkConjunctiveParity(premise1, premise2)) {
-                        return { valid: false, reason: 'Conjunctive parity violation (Rule 7)' };
-                    }
-                }
-                
-                if (!this.checkNonDerivability(step1, step2)) {
-                    return { valid: false, reason: 'Derivable from middle window (Rule 8)' };
-                }
-                
-                return { valid: true, cost, reason: 'Valid match' };
+
+                const certificate = {
+                    type: 'invertible',
+                    mapping,
+                    sharedLetters,
+                    parity: true,
+                    midWindowDerivable: midDerivable
+                };
+
+                return { match: true, certificate, midWindowDerivable: midDerivable };
             }
         }
 
-        // ============================================================================
-        // PREMISE GENERATOR
-        // ============================================================================
+        class MatchPlanner {
+            constructor(rng) {
+                this.rng = rng;
+                this.schedule = [];
+                this.flips = new Map();
+            }
+
+            plan(totalTrials, n) {
+                this.schedule = new Array(totalTrials).fill(false);
+                this.flips.clear();
+                const rate = this.rng.nextBetween(0.35, 0.55);
+                const history = [];
+                for (let i = 0; i < totalTrials; i++) {
+                    if (i < n) {
+                        this.schedule[i] = false;
+                        history.push(false);
+                        continue;
+                    }
+
+                    let decision = this.rng.next() < rate;
+                    if (this.wouldRepeat(history, decision)) {
+                        decision = !decision;
+                        this.flips.set(i, true);
+                    }
+
+                    this.schedule[i] = decision;
+                    history.push(decision);
+                    if (history.length > 24) history.shift();
+                }
+                return this.schedule;
+            }
+
+            wouldRepeat(history, decision) {
+                const window = [...history, decision];
+                if (window.length < 24) return false;
+                const recent = window.slice(-12);
+                const previous = window.slice(-24, -12);
+                return this.isRotationEqual(previous, recent);
+            }
+
+            isRotationEqual(arr1, arr2) {
+                if (arr1.length !== arr2.length) return false;
+                const joined1 = arr1.join('');
+                const joined2 = arr2.join('');
+                return (joined1 + joined1).includes(joined2);
+            }
+
+            forceFlip(index) {
+                if (index < 0 || index >= this.schedule.length) return;
+                this.schedule[index] = !this.schedule[index];
+                this.flips.set(index, true);
+            }
+
+            wasFlipped(index) {
+                return this.flips.get(index) || false;
+            }
+        }
+
+        class GameLogger {
+            constructor() {
+                this.entries = [];
+            }
+
+            add(entry) {
+                this.entries.push(entry);
+            }
+
+            reset() {
+                this.entries = [];
+            }
+
+            toCSV() {
+                if (this.entries.length === 0) return '';
+                const headers = Object.keys(this.entries[0]);
+                const rows = [headers.join(',')];
+                this.entries.forEach(entry => {
+                    const row = headers.map(key => {
+                        const value = entry[key];
+                        if (value === null || value === undefined) return '';
+                        if (typeof value === 'object') {
+                            return JSON.stringify(value).replace(/"/g, '""');
+                        }
+                        return String(value).replace(/"/g, '""');
+                    }).join(',');
+                    rows.push(row);
+                });
+                return rows.join('\n');
+            }
+
+            toJSON() {
+                return JSON.stringify(this.entries, null, 2);
+            }
+        }
+
+        class GameState {
+            constructor(seed, options) {
+                this.seed = seed;
+                this.rng = new Mulberry32(seed);
+                this.letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+                this.windowSize = options.windowSize;
+                this.currentStep = 0;
+                this.constraintStore = [];
+                this.premiseHistory = [];
+                this.letterUsage = new Map();
+                this.axisUsage = { N: 0, S: 0, E: 0, W: 0 };
+                this.cooldown = new Map();
+                this.novelty = new NoveltyManager(HAMMING_WINDOW, FIRST_N_NOVELTY);
+                this.letterPool = new LetterPoolManager(this.letters, this.rng, this.letterUsage);
+                this.coordinates = new Map();
+            }
+
+            resetNovelty() {
+                this.novelty.reset();
+            }
+
+            getWindowAtoms() {
+                const cutoff = Math.max(0, this.currentStep - this.windowSize);
+                return this.constraintStore
+                    .filter(entry => entry.step >= cutoff)
+                    .flatMap(entry => entry.atoms);
+            }
+
+            getConstraintsInRange(start, end) {
+                return this.constraintStore
+                    .filter(entry => entry.step >= start && entry.step <= end)
+                    .flatMap(entry => entry.atoms);
+            }
+
+            ensureLetterUsage(letter) {
+                if (!this.letterUsage.has(letter)) {
+                    this.letterUsage.set(letter, { head: 0, tail: 0 });
+                }
+                return this.letterUsage.get(letter);
+            }
+
+            updateUsage(premise) {
+                premise.atoms.forEach(atom => {
+                    this.ensureLetterUsage(atom.head).head += 1;
+                    this.ensureLetterUsage(atom.tail).tail += 1;
+                    this.axisUsage[atom.axis] += 1;
+                });
+            }
+
+            recordPremise(premise, atoms, metadata) {
+                this.constraintStore.push({ step: this.currentStep, atoms });
+                this.premiseHistory.push({ step: this.currentStep, premise, metadata });
+                this.currentStep += 1;
+
+                const cutoff = this.currentStep - this.windowSize;
+                this.constraintStore = this.constraintStore.filter(entry => entry.step >= cutoff);
+                this.premiseHistory = this.premiseHistory.filter(entry => entry.step >= cutoff - this.windowSize);
+
+                this.updateUsage(premise);
+            }
+
+            getPremiseAt(index) {
+                const entry = this.premiseHistory.find(p => p.step === index);
+                return entry ? entry.premise : null;
+            }
+
+            getActiveCooldown(currentTrial) {
+                const active = new Set();
+                this.cooldown.forEach((expiry, letter) => {
+                    if (expiry > currentTrial) {
+                        active.add(letter);
+                    }
+                });
+                return active;
+            }
+
+            applyCooldown(letters, currentTrial, n) {
+                const cooldownLength = Math.ceil(n / 2);
+                letters.forEach(letter => {
+                    this.cooldown.set(letter, currentTrial + cooldownLength);
+                });
+            }
+        }
+
         class PremiseGenerator {
-            constructor(state, solver, ruleChecker) {
+            constructor(state, solver, equivalence) {
                 this.state = state;
                 this.solver = solver;
-                this.ruleChecker = ruleChecker;
-                this.matchSchedule = [];
+                this.equivalence = equivalence;
             }
-            
-            scheduleMatches(totalSteps, n) {
-                this.matchSchedule = [];
-                
-                for (let step = n; step < totalSteps; step++) {
-                    const targetRate = 0.5;
-                    const variance = 0.1;
-                    const probability = targetRate + (this.state.rng.next() - 0.5) * variance * 2;
-                    
-                    const shouldMatch = this.state.rng.next() < probability;
-                    this.matchSchedule[step] = shouldMatch;
-                }
-                
-                this.breakRhythm();
-                this.balanceMatches(n, totalSteps);
-            }
-            
-            breakRhythm() {
-                for (let period = 2; period <= 6; period++) {
-                    let isRhythmic = true;
-                    let startIdx = -1;
-                    
-                    for (let i = period; i < this.matchSchedule.length; i++) {
-                        if (this.matchSchedule[i] === this.matchSchedule[i - period]) {
-                            if (startIdx === -1) startIdx = i;
-                        } else {
-                            isRhythmic = false;
-                            break;
-                        }
+
+            generate(options) {
+                const {
+                    trialIndex,
+                    k,
+                    n,
+                    plannedMatch,
+                    nBackPremise,
+                    middleAtoms,
+                    avoidLetters,
+                    allowOverride
+                } = options;
+
+                const windowAtoms = this.state.getWindowAtoms();
+                let bestCandidate = null;
+                let attempts = 0;
+                let expanded = false;
+
+                while (attempts < MAX_GENERATION_ATTEMPTS) {
+                    const expand = attempts > 0 && attempts % NOVELTY_OVERRIDE_THRESHOLD === 0;
+                    if (expand) expanded = true;
+                    const pool = this.state.letterPool.nextPool(k, { expand });
+                    const candidateAtoms = plannedMatch
+                        ? this.buildMatchCandidate(nBackPremise, pool, k)
+                        : this.buildNovelPremise(pool, k, avoidLetters);
+                    attempts++;
+                    if (!candidateAtoms) continue;
+
+                    const premise = new Premise(candidateAtoms);
+                    const signatures = this.state.novelty.buildSignatures(premise);
+                    const novelty = this.state.novelty.evaluate(premise, signatures, trialIndex);
+
+                    if (novelty.blocked && !(allowOverride && expanded)) {
+                        continue;
                     }
-                    
-                    if (isRhythmic && startIdx !== -1) {
-                        for (let i = startIdx; i < this.matchSchedule.length; i += period) {
-                            if (this.state.rng.next() < 0.3) {
-                                this.matchSchedule[i] = !this.matchSchedule[i];
+
+                    const satResult = this.solver.evaluate(windowAtoms, premise.atoms);
+                    if (!satResult.ok) {
+                        continue;
+                    }
+
+                    let certificate = null;
+                    let midDerivable = false;
+
+                    if (plannedMatch) {
+                        const equivalence = this.equivalence.computeCertificate(nBackPremise, premise, middleAtoms);
+                        if (!equivalence.match) {
+                            continue;
+                        }
+                        certificate = equivalence.certificate;
+                        midDerivable = equivalence.midWindowDerivable;
+                    } else {
+                        if (nBackPremise) {
+                            const check = this.equivalence.computeCertificate(nBackPremise, premise, middleAtoms);
+                            if (check.match) {
+                                continue;
                             }
                         }
                     }
+
+                    const score = Math.exp(ACCEPTANCE_ALPHA * novelty.noveltyScores.hamming - ACCEPTANCE_BETA * novelty.penalty);
+                    if (!bestCandidate || score > bestCandidate.score) {
+                        bestCandidate = {
+                            premise,
+                            signatures,
+                            novelty,
+                            satResult,
+                            certificate,
+                            midDerivable,
+                            attempts
+                        };
+                    }
+
+                    if (this.state.rng.next() < Math.min(1, score)) {
+                        return bestCandidate;
+                    }
                 }
+
+                return bestCandidate;
             }
-            
-            balanceMatches(n, totalSteps) {
-                let matchCount = 0;
-                for (let i = n; i < totalSteps; i++) {
-                    if (this.matchSchedule[i]) matchCount++;
+
+            buildMatchCandidate(nBackPremise, pool, k) {
+                if (!nBackPremise) return null;
+                const atoms = [];
+                const nAtoms = nBackPremise.atoms;
+                for (let i = 0; i < nAtoms.length; i++) {
+                    const atom = nAtoms[i];
+                    const invert = this.state.rng.next() < 0.6;
+                    atoms.push(invert ? Atom.invert(atom) : new Atom(atom.axis, atom.head, atom.tail));
                 }
-                
-                const total = totalSteps - n;
-                const matchRate = matchCount / total;
-                
-                if (matchRate < 0.4) {
-                    const needed = Math.ceil(total * 0.4) - matchCount;
-                    let added = 0;
-                    for (let i = n; i < totalSteps && added < needed; i++) {
-                        if (!this.matchSchedule[i] && this.state.rng.next() < 0.5) {
-                            this.matchSchedule[i] = true;
-                            added++;
-                        }
-                    }
-                } else if (matchRate > 0.6) {
-                    const excess = matchCount - Math.floor(total * 0.6);
-                    let removed = 0;
-                    for (let i = n; i < totalSteps && removed < excess; i++) {
-                        if (this.matchSchedule[i] && this.state.rng.next() < 0.5) {
-                            this.matchSchedule[i] = false;
-                            removed++;
-                        }
-                    }
+
+                while (atoms.length < k) {
+                    const head = this.state.rng.choice(pool);
+                    const tailOptions = pool.filter(l => l !== head);
+                    if (tailOptions.length === 0) break;
+                    const tail = this.state.rng.choice(tailOptions);
+                    const axis = this.state.rng.choice(MATCH_AXES);
+                    atoms.push(new Atom(axis, head, tail));
                 }
+                return atoms.slice(0, k);
             }
-            
-            generatePremise(k, n, shouldMatch = false, previousPremise = null) {
-                const maxRetries = 30;
-                
-                for (let attempt = 0; attempt < maxRetries; attempt++) {
-                    let atoms;
-                    
-                    if (shouldMatch && previousPremise) {
-                        atoms = this.generateMatchingPremise(previousPremise, k);
-                    } else {
-                        atoms = this.generateRandomPremise(k, n);
-                    }
-                    
-                    if (!atoms) continue;
-                    
-                    if (!this.ruleChecker.checkWindowSatisfiability(atoms)) {
-                        continue;
-                    }
-                    
-                    if (!this.ruleChecker.checkAxisOrthogonality(atoms)) {
-                        continue;
-                    }
-                    
-                    if (shouldMatch && previousPremise) {
-                        const newPremise = new Premise(atoms);
-                        const matchCheck = this.ruleChecker.isValidMatch(
-                            previousPremise,
-                            newPremise,
-                            this.state.currentStep - n,
-                            this.state.currentStep
-                        );
-                        
-                        if (!matchCheck.valid) {
-                            continue;
-                        }
-                    }
-                    
-                    return atoms;
-                }
-                
-                return null;
-            }
-            
-            generateRandomPremise(k, n) {
-                const windowLetters = new Set();
-                const windowConstraints = this.state.getWindowConstraints();
-                windowConstraints.forEach(atom => {
-                    windowLetters.add(atom.head);
-                    windowLetters.add(atom.tail);
-                });
-                
-                const nBackConstraints = this.state.constraintStore.find(
-                    c => c.step === this.state.currentStep - n
-                );
-                const nBackLetters = new Set();
-                if (nBackConstraints) {
-                    nBackConstraints.atoms.forEach(atom => {
-                        nBackLetters.add(atom.head);
-                        nBackLetters.add(atom.tail);
-                    });
-                }
-                
-                const minLetters = k + 1;
-                const maxLetters = Math.min(6, 2 * k + 2);
-                const numLetters = this.state.rng.nextInt(minLetters, maxLetters);
-                
-                const availableLetters = this.state.rng.shuffle(this.state.letters);
-                const selectedLetters = [];
-                
-                let overlap = 0;
-                if (nBackLetters.size > 0) {
-                    const nBackArray = Array.from(nBackLetters);
-                    const targetOverlap = Math.min(2, nBackArray.length);
-                    
-                    for (let i = 0; i < targetOverlap && overlap < targetOverlap; i++) {
-                        if (this.state.rng.next() < 0.6) {
-                            selectedLetters.push(nBackArray[i]);
-                            overlap++;
-                        }
-                    }
-                }
-                
-                for (const letter of availableLetters) {
-                    if (selectedLetters.length >= numLetters) break;
-                    if (!selectedLetters.includes(letter)) {
-                        selectedLetters.push(letter);
-                    }
-                }
-                
-                if (selectedLetters.length < minLetters) return null;
-                
-                this.state.ensureCoordinates(selectedLetters);
-                
+
+            buildNovelPremise(pool, k, avoidLetters) {
                 const atoms = [];
                 const usedPairs = new Set();
-                const axes = ['N', 'S', 'E', 'W'];
-                
+                const axisWeights = MATCH_AXES.map(axis => 1 / (1 + this.state.axisUsage[axis]));
+
                 for (let i = 0; i < k; i++) {
                     let attempts = 0;
-                    while (attempts < 20) {
-                        const head = this.state.rng.choice(selectedLetters);
-                        const tail = this.state.rng.choice(selectedLetters.filter(l => l !== head));
-                        
-                        if (!tail) break;
-                        
-                        const pairKey = [head, tail].sort().join(',');
+                    while (attempts < 40) {
+                        let head = this.state.rng.choice(pool);
+                        let tailCandidates = pool.filter(letter => letter !== head);
+                        if (avoidLetters && avoidLetters.size > 0) {
+                            const filtered = tailCandidates.filter(letter => !avoidLetters.has(letter));
+                            if (filtered.length > 0) {
+                                tailCandidates = filtered;
+                            }
+                            if (avoidLetters.has(head)) {
+                                const alternatives = pool.filter(letter => !avoidLetters.has(letter));
+                                if (alternatives.length > 0) {
+                                    head = this.state.rng.choice(alternatives);
+                                    tailCandidates = pool.filter(letter => letter !== head && !avoidLetters.has(letter));
+                                }
+                            }
+                        }
+
+                        if (tailCandidates.length === 0) break;
+                        const tail = this.state.rng.choice(tailCandidates);
+                        const pairKey = `${head}|${tail}`;
                         if (usedPairs.has(pairKey)) {
                             attempts++;
                             continue;
                         }
-                        
-                        const axis = this.state.rng.choice(axes);
-                        const atom = new Atom(axis, head, tail);
-                        
-                        atoms.push(atom);
+
+                        const axis = this.state.rng.weightedChoice(MATCH_AXES, axisWeights);
+                        atoms.push(new Atom(axis, head, tail));
                         usedPairs.add(pairKey);
                         break;
                     }
                 }
-                
+
                 return atoms.length === k ? atoms : null;
-            }
-            
-            generateMatchingPremise(previousPremise, k) {
-                const atoms = previousPremise.atoms.map(atom => {
-                    if (this.state.rng.next() < 0.8) {
-                        return Atom.invert(atom);
-                    }
-                    return new Atom(atom.axis, atom.head, atom.tail);
-                });
-                
-                return atoms;
             }
         }
 
-        // ============================================================================
-        // VOICE SYNTHESIS - ANGELIC SINGLE FEMININE VOICE
-        // ============================================================================
         class VoiceSynthesis {
             constructor() {
                 this.synth = window.speechSynthesis;
-                this.VOX = null;
+                this.voice = null;
                 this.voiceReady = false;
-                this.pitch = 1.20;
-                this.rate = 0.90;
+                this.pitch = 1.2;
+                this.rate = 0.9;
                 this.volume = 1.0;
-                
-                this.speechQueue = [];
+                this.queue = [];
                 this.isSpeaking = false;
-                this.hasVoicesChangedFired = false;
+                this.sessionToken = 0;
             }
-            
+
             async initialize() {
-                return new Promise((resolve) => {
-                    const attemptSelection = () => {
+                await new Promise(resolve => {
+                    const attempt = () => {
                         const voices = this.synth.getVoices();
-                        
-                        if (voices.length > 0 && !this.VOX) {
-                            this.selectFeminineVoice(voices);
-                            
-                            if (this.VOX) {
-                                console.log(`🎙️ Selected voice: ${this.VOX.name} (${this.VOX.lang})`);
-                                this.voiceReady = true;
-                                
-                                try {
-                                    localStorage.setItem('relational-nback-voice-name', this.VOX.name);
-                                    localStorage.setItem('relational-nback-voice-lang', this.VOX.lang);
-                                } catch (e) {
-                                    console.warn('Could not persist voice to localStorage');
-                                }
-                                
-                                resolve();
-                            }
+                        if (voices.length === 0) {
+                            setTimeout(attempt, 200);
+                            return;
                         }
+                        this.selectVoice(voices);
+                        this.voiceReady = true;
+                        resolve();
                     };
-                    
-                    attemptSelection();
-                    
-                    if (!this.voiceReady && !this.hasVoicesChangedFired) {
-                        this.synth.onvoiceschanged = () => {
-                            if (!this.hasVoicesChangedFired) {
-                                this.hasVoicesChangedFired = true;
-                                attemptSelection();
-                                this.synth.onvoiceschanged = null;
-                            }
-                        };
-                    }
-                    
-                    setTimeout(() => {
-                        if (!this.voiceReady) {
-                            console.warn('Voice selection timeout - using fallback');
-                            const voices = this.synth.getVoices();
-                            if (voices.length > 0) {
-                                this.VOX = voices[0];
-                                this.voiceReady = true;
-                                console.log(`⚠️ Fallback voice: ${this.VOX.name}`);
-                            }
-                            resolve();
-                        }
-                    }, 2000);
+                    attempt();
                 });
             }
-            
-            selectFeminineVoice(voices) {
+
+            selectVoice(voices) {
                 const storedName = localStorage.getItem('relational-nback-voice-name');
                 const storedLang = localStorage.getItem('relational-nback-voice-lang');
-                
+
                 if (storedName && storedLang) {
                     const stored = voices.find(v => v.name === storedName && v.lang === storedLang);
                     if (stored) {
-                        this.VOX = stored;
+                        this.voice = stored;
                         return;
                     }
                 }
-                
-                const localePreferences = ['en-AU', 'en-GB', 'en-US'];
-                
-                const femininePriority = [
-                    'Karen', 'Natasha', 'Sonia', 'Serena', 
-                    'Aria', 'Jenny', 'Samantha',
-                    'Online (Natural)', 'Neural',
-                    'Google UK English Female', 'Google US English'
-                ];
-                
-                for (const locale of localePreferences) {
-                    const localeVoices = voices.filter(v => v.lang.startsWith(locale));
-                    
-                    for (const namePattern of femininePriority) {
-                        const match = localeVoices.find(v => v.name.includes(namePattern));
+
+                const preferredLocales = ['en-AU', 'en-GB', 'en-US'];
+                const feminineHints = ['Female', 'Karen', 'Natasha', 'Sonia', 'Serena', 'Aria', 'Samantha'];
+
+                for (const locale of preferredLocales) {
+                    const candidates = voices.filter(v => v.lang.startsWith(locale));
+                    for (const hint of feminineHints) {
+                        const match = candidates.find(v => v.name.includes(hint));
                         if (match) {
-                            this.VOX = match;
+                            this.voice = match;
+                            localStorage.setItem('relational-nback-voice-name', match.name);
+                            localStorage.setItem('relational-nback-voice-lang', match.lang);
                             return;
                         }
                     }
-                    
-                    const femaleVoice = localeVoices.find(v => 
-                        v.name.toLowerCase().includes('female') ||
-                        /\b(alice|allison|amy|anna|bella|claire|emily|emma|grace|helen|julia|kate|linda|lisa|mary|melissa|michelle|nancy|olivia|rachel|rebecca|ruth|sarah|sophia|susan|victoria)\b/i.test(v.name)
-                    );
-                    
-                    if (femaleVoice) {
-                        this.VOX = femaleVoice;
-                        return;
-                    }
-                    
-                    if (localeVoices.length > 0) {
-                        this.VOX = localeVoices[0];
+                    if (candidates.length) {
+                        this.voice = candidates[0];
                         return;
                     }
                 }
-                
-                if (voices.length > 0) {
-                    this.VOX = voices[0];
-                }
+
+                this.voice = voices[0] || null;
             }
-            
+
             getVoiceInfo() {
-                if (!this.VOX) return 'Voice not initialized';
-                return `${this.VOX.name} (${this.VOX.lang})`;
+                return this.voice ? `${this.voice.name} (${this.voice.lang})` : 'Voice not initialized';
             }
-            
-            async speak(text, sessionToken) {
-                return new Promise((resolve) => {
-                    this.speechQueue.push({ text, resolve, sessionToken });
+
+            speak(text, sessionToken) {
+                return new Promise(resolve => {
+                    this.queue.push({ text, resolve, sessionToken });
                     this.processQueue();
                 });
             }
-            
+
             async processQueue() {
-                if (this.isSpeaking || this.speechQueue.length === 0) {
-                    return;
-                }
-                
+                if (this.isSpeaking) return;
+                const item = this.queue.shift();
+                if (!item) return;
+
                 this.isSpeaking = true;
-                const { text, resolve, sessionToken } = this.speechQueue.shift();
-                
-                await this.speakSingle(text, sessionToken);
-                
-                resolve();
-                this.isSpeaking = false;
-                
-                setTimeout(() => {
-                    this.processQueue();
-                }, 100);
-            }
-            
-            async speakSingle(text, sessionToken) {
-                return new Promise((resolve) => {
-                    if (!this.VOX) {
-                        console.error('VOX not initialized');
-                        resolve();
-                        return;
-                    }
-                    
-                    setTimeout(() => {
-                        const utterance = new SpeechSynthesisUtterance(text);
-                        utterance.voice = this.VOX;
-                        utterance.lang = this.VOX.lang;
-                        utterance.rate = Math.max(0.88, Math.min(0.98, this.rate));
-                        utterance.pitch = Math.max(1.12, Math.min(1.25, this.pitch));
-                        utterance.volume = this.volume;
-                        
-                        utterance.onend = () => {
-                            resolve();
-                        };
-                        
-                        utterance.onerror = (event) => {
-                            console.error('Speech synthesis error:', event);
-                            resolve();
-                        };
-                        
-                        this.synth.speak(utterance);
-                    }, 120 + Math.random() * 60);
-                });
-            }
-            
-            async speakPremise(premise, sessionToken) {
-                const text = premise.toNaturalSpeech();
-                await this.speak(text, sessionToken);
-            }
-            
-            cancel() {
-                this.synth.cancel();
-                
-                setTimeout(() => {
-                    this.speechQueue = [];
+                const utterance = new SpeechSynthesisUtterance(item.text);
+                utterance.voice = this.voice;
+                utterance.pitch = this.pitch;
+                utterance.rate = this.rate;
+                utterance.volume = this.volume;
+
+                utterance.onend = () => {
                     this.isSpeaking = false;
-                }, 100);
+                    item.resolve();
+                    this.processQueue();
+                };
+
+                this.synth.speak(utterance);
             }
-            
+
+            async speakPremise(premise, sessionToken) {
+                if (!premise) return;
+                const text = premise.toNaturalSpeech();
+                return this.speak(text, sessionToken);
+            }
+
             async cancelAndWait() {
                 this.synth.cancel();
-                this.speechQueue = [];
                 this.isSpeaking = false;
-                
-                await new Promise(resolve => setTimeout(resolve, 100));
-            }
-            
-            setRate(rate) {
-                this.rate = Math.max(0.88, Math.min(0.98, rate));
-            }
-            
-            adaptRate(recentRTs, recentAccuracy) {
-                if (recentRTs.length < 10) return;
-                
-                const medianRT = this.calculateMedian(recentRTs.slice(-10));
-                const avgAccuracy = recentAccuracy.slice(-10).reduce((a, b) => a + b, 0) / Math.min(10, recentAccuracy.length);
-                
-                if (medianRT < 1200 && avgAccuracy >= 0.90) {
-                    this.setRate(this.rate + 0.02);
-                } else if (medianRT > 2800 || avgAccuracy <= 0.65) {
-                    this.setRate(this.rate - 0.02);
-                }
-            }
-            
-            calculateMedian(arr) {
-                if (arr.length === 0) return 0;
-                const sorted = [...arr].sort((a, b) => a - b);
-                const mid = Math.floor(sorted.length / 2);
-                return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+                await new Promise(resolve => setTimeout(resolve, 50));
             }
         }
 
-        // ============================================================================
-        // GAME ENGINE - STATE MACHINE WITH SESSION TOKENS
-        // ============================================================================
         class GameEngine {
             constructor() {
-                this.state = null;
-                this.solver = null;
-                this.ruleChecker = null;
-                this.generator = null;
+                this.seedManager = new SeedManager();
+                this.logger = new GameLogger();
                 this.voice = new VoiceSynthesis();
-                
-                this.gameState = 'STOPPED';
-                this.sessionToken = 0;
-                
+                this.secondsPerTrial = 6;
                 this.n = 2;
                 this.k = 1;
-                this.secondsPerTrial = 6.0;
-                this.totalTrials = 50;
-                this.currentTrial = 0;
-                
-                this.trialHistory = [];
-                this.recentAccuracy = [];
-                this.recentRTs = [];
-                this.M = 20;
-                
+                this.totalTrials = 60;
+                this.state = null;
+                this.solver = null;
+                this.equivalence = new EquivalenceEngine(false);
+                this.generator = null;
+                this.planner = null;
+                this.matchSchedule = [];
+                this.trialIndex = 0;
+                this.awaitingResponse = false;
+                this.sessionToken = 0;
+                this.responseResolver = null;
+                this.responseTimer = null;
+                this.responseStartTime = 0;
+                this.currentPremises = [];
                 this.score = 0;
                 this.correctResponses = 0;
                 this.totalResponses = 0;
-                
-                this.premises = [];
-                this.lastPremise = null;
-                this.awaitingResponse = false;
-                this.responseStartTime = 0;
-                this.responseTimer = null;
-                this.hasRepeated = false;
-                
-                this.transitivityEnabled = false;
-                this.resetSeedOnRestart = false;
-                
-                this.lastRestartClick = 0;
-                this.lastStopClick = 0;
-                
-                this.loadSettings();
+                this.omissions = 0;
+                this.recentAccuracy = [];
+                this.M = 8;
+                this.gameRunning = false;
+                this.lockSeed = this.seedManager.getLockPreference();
+                this.resetOnRestart = false;
+                this.pendingPlannerFlip = false;
             }
-            
-            loadSettings() {
-                try {
-                    const saved = localStorage.getItem('relational-nback-secondsPerTrial');
-                    if (saved) {
-                        this.secondsPerTrial = parseFloat(saved);
-                    }
-                } catch (e) {
-                    console.warn('Could not load settings from localStorage');
-                }
-            }
-            
-            saveSettings() {
-                try {
-                    localStorage.setItem('relational-nback-secondsPerTrial', this.secondsPerTrial.toString());
-                } catch (e) {
-                    console.warn('Could not save settings to localStorage');
-                }
-            }
-            
-            async initialize(n, k, transitivityEnabled = false) {
-                this.n = n;
-                this.k = k;
-                this.transitivityEnabled = transitivityEnabled;
-                
-                const seed = this.resetSeedOnRestart ? Date.now() : (this.state?.seed || Date.now());
-                
-                this.state = new GameState(seed);
-                this.solver = new ConstraintSolver(this.state);
-                this.ruleChecker = new RuleChecker(this.state, this.solver, transitivityEnabled);
-                this.generator = new PremiseGenerator(this.state, this.solver, this.ruleChecker);
-                
-                this.generator.scheduleMatches(this.totalTrials, this.n);
-                
-                this.currentTrial = 0;
-                this.premises = [];
-                
-                if (this.resetSeedOnRestart) {
-                    this.trialHistory = [];
-                    this.score = 0;
-                    this.correctResponses = 0;
-                    this.totalResponses = 0;
-                    this.recentAccuracy = [];
-                    this.recentRTs = [];
-                }
-            }
-            
-            async start() {
-                this.gameState = 'RUNNING';
-                this.sessionToken++;
-                const currentSession = this.sessionToken;
-                
+
+            async initialize() {
+                await this.voice.initialize();
+                this.updateVoiceInfo();
+                this.attachUI();
                 this.updateUI();
-                this.updateButtonStates();
-                
-                while (this.currentTrial < this.totalTrials && this.gameState === 'RUNNING' && currentSession === this.sessionToken) {
-                    if (this.gameState !== 'RUNNING') break;
-                    
-                    await this.runTrial(currentSession);
-                    this.currentTrial++;
-                }
-                
-                if (this.gameState === 'RUNNING' && currentSession === this.sessionToken) {
-                    this.endGame();
-                }
             }
-            
-            async runTrial(sessionToken) {
-                if (sessionToken !== this.sessionToken) return;
-                
-                const shouldMatch = this.currentTrial >= this.n && 
-                                   this.generator.matchSchedule[this.currentTrial];
-                
-                const previousPremise = this.currentTrial >= this.n ? 
-                                       this.premises[this.currentTrial - this.n] : null;
-                
-                const atoms = this.generator.generatePremise(
-                    this.k,
-                    this.n,
-                    shouldMatch,
-                    previousPremise
-                );
-                
-                if (!atoms) {
-                    console.log('Failed to generate valid premise for trial', this.currentTrial);
-                    return;
-                }
-                
-                const premise = new Premise(atoms);
-                this.premises.push(premise);
-                this.state.addToConstraintStore(atoms);
-                this.state.currentStep++;
-                
-                document.getElementById('premise-display').textContent = premise.toString();
-                
-                this.lastPremise = premise;
-                this.hasRepeated = false;
-                
-                await this.voice.speakPremise(premise, sessionToken);
-                
-                if (sessionToken !== this.sessionToken) return;
-                
-                this.awaitingResponse = true;
-                this.responseStartTime = Date.now();
-                
-                const response = await this.waitForResponse(sessionToken);
-                
-                if (sessionToken !== this.sessionToken) return;
-                
-                this.awaitingResponse = false;
-                
-                const isActualMatch = this.checkIfMatch(this.currentTrial);
-                const correct = response === isActualMatch;
-                
-                if (correct) {
-                    this.score++;
-                    this.correctResponses++;
-                }
-                this.totalResponses++;
-                
-                const rt = Date.now() - this.responseStartTime;
-                this.recordTrial({
-                    trial: this.currentTrial,
-                    n: this.n,
-                    k: this.k,
-                    premise: premise.toString(),
-                    plannedMatch: shouldMatch,
-                    actualMatch: isActualMatch,
-                    response: response,
-                    correct: correct,
-                    rt: rt,
-                    repeated: this.hasRepeated
+
+            attachUI() {
+                document.getElementById('lock-seed-toggle').checked = this.lockSeed;
+                document.getElementById('lock-seed-toggle').addEventListener('change', (e) => {
+                    this.lockSeed = e.target.checked;
+                    this.seedManager.setLockPreference(this.lockSeed);
                 });
-                
-                this.recentRTs.push(rt);
-                if (this.recentRTs.length > 20) this.recentRTs.shift();
-                
-                this.showFeedback(correct);
-                
-                this.recentAccuracy.push(correct ? 1 : 0);
-                if (this.recentAccuracy.length > this.M) {
-                    this.recentAccuracy.shift();
-                }
-                
-                if (this.recentAccuracy.length >= this.M && this.currentTrial % this.M === 0) {
-                    this.adaptDifficulty();
-                }
-                
-                this.updateUI();
-                
-                const interPremiseGap = 800 + Math.random() * 400;
-                await new Promise(resolve => setTimeout(() => {
-                    if (sessionToken === this.sessionToken) resolve();
-                }, interPremiseGap));
-                
-                if (sessionToken === this.sessionToken) {
-                    document.getElementById('feedback').textContent = '';
-                }
-            }
-            
-            checkIfMatch(currentTrialIndex) {
-                if (currentTrialIndex < this.n) return false;
-                
-                const currentPremise = this.premises[currentTrialIndex];
-                const nBackPremise = this.premises[currentTrialIndex - this.n];
-                
-                const matchCheck = this.ruleChecker.isValidMatch(
-                    nBackPremise,
-                    currentPremise,
-                    currentTrialIndex - this.n,
-                    currentTrialIndex
-                );
-                
-                return matchCheck.valid;
-            }
-            
-            waitForResponse(sessionToken) {
-                return new Promise((resolve) => {
-                    this.responseResolver = resolve;
-                    
-                    document.getElementById('match-btn').disabled = false;
-                    document.getElementById('no-match-btn').disabled = false;
-                    document.getElementById('repeat-btn').disabled = false;
-                    
-                    const timeoutMs = this.secondsPerTrial * 1000;
-                    
-                    this.responseTimer = setTimeout(() => {
-                        if (this.responseResolver && sessionToken === this.sessionToken) {
-                            this.responseResolver(null);
-                            this.responseResolver = null;
-                        }
-                    }, timeoutMs);
+
+                document.getElementById('reset-seed-toggle').addEventListener('change', (e) => {
+                    this.resetOnRestart = e.target.checked;
                 });
-            }
-            
-            handleResponse(isMatch) {
-                if (!this.awaitingResponse || !this.responseResolver) return;
-                
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                
-                document.getElementById('match-btn').disabled = true;
-                document.getElementById('no-match-btn').disabled = true;
-                document.getElementById('repeat-btn').disabled = true;
-                
-                this.responseResolver(isMatch);
-                this.responseResolver = null;
-            }
-            
-            async handleRepeat() {
-                if (!this.awaitingResponse || !this.lastPremise || this.hasRepeated) return;
-                
-                this.hasRepeated = true;
-                
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                
-                await this.voice.cancelAndWait();
-                
-                const currentSession = this.sessionToken;
-                await this.voice.speakPremise(this.lastPremise, currentSession);
-                
-                if (currentSession !== this.sessionToken) return;
-                
-                this.responseStartTime = Date.now();
-                
-                const timeoutMs = this.secondsPerTrial * 1000;
-                this.responseTimer = setTimeout(() => {
-                    if (this.responseResolver && currentSession === this.sessionToken) {
-                        this.responseResolver(null);
-                        this.responseResolver = null;
+
+                document.getElementById('transitivity-toggle').addEventListener('change', (e) => {
+                    this.equivalence.setTransitivity(e.target.checked);
+                });
+
+                document.getElementById('debug-toggle').addEventListener('change', (e) => {
+                    document.getElementById('debug').hidden = !e.target.checked;
+                });
+
+                const sptSlider = document.getElementById('spt-slider');
+                const sptNumber = document.getElementById('spt-number');
+                const syncSeconds = (value) => {
+                    this.secondsPerTrial = parseFloat(value);
+                    document.getElementById('spt-value').textContent = this.secondsPerTrial.toFixed(1);
+                };
+                sptSlider.addEventListener('input', (e) => {
+                    sptNumber.value = e.target.value;
+                    syncSeconds(e.target.value);
+                });
+                sptNumber.addEventListener('input', (e) => {
+                    sptSlider.value = e.target.value;
+                    syncSeconds(e.target.value);
+                });
+
+                document.getElementById('n-slider').addEventListener('input', (e) => {
+                    this.n = parseInt(e.target.value, 10);
+                    document.getElementById('n-value').textContent = this.n;
+                });
+
+                document.getElementById('k-slider').addEventListener('input', (e) => {
+                    this.k = parseInt(e.target.value, 10);
+                    document.getElementById('k-value').textContent = this.k;
+                });
+
+                document.getElementById('start-btn').addEventListener('click', () => this.start(true));
+                document.getElementById('restart-btn').addEventListener('click', () => this.start(false));
+                document.getElementById('stop-btn').addEventListener('click', () => this.stop());
+                document.getElementById('match-btn').addEventListener('click', () => this.handleResponse(true));
+                document.getElementById('no-match-btn').addEventListener('click', () => this.handleResponse(false));
+                document.getElementById('repeat-btn').addEventListener('click', () => this.handleRepeat());
+
+                document.getElementById('preview-btn').addEventListener('click', async () => {
+                    const previewPremise = new Premise([
+                        new Atom('N', 'A', 'B'),
+                        new Atom('E', 'C', 'D')
+                    ]);
+                    await this.voice.speakPremise(previewPremise, 0);
+                });
+
+                document.addEventListener('keydown', (e) => {
+                    if (!this.awaitingResponse) return;
+                    if (e.code === 'Space') {
+                        e.preventDefault();
+                        this.handleResponse(true);
+                    } else if (e.code === 'Enter') {
+                        e.preventDefault();
+                        this.handleResponse(false);
                     }
-                }, timeoutMs);
-            }
-            
-            adaptDifficulty() {
-                if (this.recentAccuracy.length >= this.M * 2) {
-                    const window1 = this.recentAccuracy.slice(-this.M * 2, -this.M);
-                    const window2 = this.recentAccuracy.slice(-this.M);
-                    
-                    const acc1 = window1.reduce((a, b) => a + b) / window1.length;
-                    const acc2 = window2.reduce((a, b) => a + b) / window2.length;
-                    
-                    if (acc1 >= 0.85 && acc2 >= 0.85) {
-                        if (this.k < 4) {
-                            this.k++;
-                            console.log('Increasing k to', this.k);
-                        } else if (this.n < 5) {
-                            this.n++;
-                            console.log('Increasing n to', this.n);
-                            this.generator.scheduleMatches(this.totalTrials - this.currentTrial, this.n);
-                        }
-                    } else if (acc1 <= 0.65 && acc2 <= 0.65) {
-                        if (this.k > 1) {
-                            this.k--;
-                            console.log('Decreasing k to', this.k);
-                        } else if (this.n > 1) {
-                            this.n--;
-                            console.log('Decreasing n to', this.n);
-                            this.generator.scheduleMatches(this.totalTrials - this.currentTrial, this.n);
-                        }
-                    }
-                }
-                
-                this.voice.adaptRate(this.recentRTs, this.recentAccuracy);
-            }
-            
-            recordTrial(data) {
-                this.trialHistory.push(data);
-                this.updateDebugPanel();
-            }
-            
-            showFeedback(correct) {
-                const feedback = document.getElementById('feedback');
-                feedback.textContent = correct ? '✓ Correct!' : '✗ Incorrect';
-                feedback.className = 'feedback ' + (correct ? 'correct' : 'incorrect');
-            }
-            
-            updateUI() {
-                document.getElementById('trial-count').textContent = this.currentTrial;
-                document.getElementById('score').textContent = this.score;
-                
-                const accuracy = this.totalResponses > 0 ? 
-                    (this.correctResponses / this.totalResponses * 100).toFixed(1) : '-';
-                document.getElementById('accuracy').textContent = accuracy + '%';
-                
-                const rollingAcc = this.recentAccuracy.length > 0 ?
-                    (this.recentAccuracy.reduce((a, b) => a + b, 0) / this.recentAccuracy.length * 100).toFixed(1) : '-';
-                document.getElementById('rolling-acc').textContent = rollingAcc + '%';
-                
-                document.getElementById('n-slider').value = this.n;
-                document.getElementById('n-value').textContent = this.n;
-                document.getElementById('k-slider').value = this.k;
-                document.getElementById('k-value').textContent = this.k;
-            }
-            
-            updateButtonStates() {
-                const restartBtn = document.getElementById('restart-btn');
-                const stopBtn = document.getElementById('stop-btn');
-                
-                if (this.gameState === 'RUNNING') {
-                    restartBtn.disabled = false;
-                    stopBtn.disabled = false;
-                } else if (this.gameState === 'STOPPED') {
-                    restartBtn.disabled = false;
-                    stopBtn.disabled = true;
-                }
-            }
-            
-            updateDebugPanel() {
-                if (!document.getElementById('debug').hidden) {
-                    const content = document.getElementById('debug-content');
-                    const lastN = this.premises.slice(-Math.min(this.n + 2, this.premises.length));
-                    
-                    content.innerHTML = lastN.map((premise, idx) => {
-                        const stepNum = this.premises.length - lastN.length + idx;
-                        return `<div class="debug-premise">
-                            <strong>Step ${stepNum}:</strong> ${premise.toKey()}
-                        </div>`;
+                });
+
+                document.getElementById('export-btn').addEventListener('click', () => {
+                    this.exportData();
+                });
+
+                document.getElementById('test-btn').addEventListener('click', async () => {
+                    const panel = document.getElementById('test-panel');
+                    const resultsEl = document.getElementById('test-results');
+                    panel.hidden = false;
+                    resultsEl.innerHTML = '<p>Running tests...</p>';
+                    const harness = new TestHarness();
+                    const results = await harness.runAll();
+                    resultsEl.innerHTML = results.map(result => {
+                        const cls = result.passed ? 'pass' : 'fail';
+                        const symbol = result.passed ? '✓' : '✗';
+                        return `<div class="test-result ${cls}">${symbol} ${result.test}: ${result.details}</div>`;
                     }).join('');
+                });
+            }
+
+            updateVoiceInfo() {
+                document.getElementById('voice-info').innerHTML = `<strong>Voice:</strong> ${this.voice.getVoiceInfo()}`;
+            }
+
+            updateUI() {
+                document.getElementById('trial-count').textContent = this.trialIndex;
+                document.getElementById('score').textContent = this.score;
+                document.getElementById('omissions').textContent = this.omissions;
+                const accuracy = this.totalResponses > 0 ? (this.correctResponses / this.totalResponses) * 100 : null;
+                document.getElementById('accuracy').textContent = accuracy !== null ? `${accuracy.toFixed(1)}%` : '-';
+                const rolling = this.recentAccuracy.length > 0
+                    ? (this.recentAccuracy.reduce((a, b) => a + b, 0) / this.recentAccuracy.length) * 100
+                    : null;
+                document.getElementById('rolling-acc').textContent = rolling !== null ? `${rolling.toFixed(1)}%` : '-';
+
+                document.getElementById('status').textContent = this.gameRunning
+                    ? `Running (n=${this.n}, k=${this.k})`
+                    : 'Idle';
+
+                document.getElementById('start-btn').disabled = this.gameRunning;
+                document.getElementById('restart-btn').disabled = !this.gameRunning;
+                document.getElementById('stop-btn').disabled = !this.gameRunning;
+            }
+
+            async start(isFreshStart) {
+                if (this.gameRunning) return;
+                this.gameRunning = true;
+                this.trialIndex = 0;
+                this.score = 0;
+                this.correctResponses = 0;
+                this.totalResponses = 0;
+                this.omissions = 0;
+                this.recentAccuracy = [];
+                this.pendingPlannerFlip = false;
+
+                const seed = this.seedManager.generateSessionSeed(this.lockSeed);
+                this.state = new GameState(seed, { windowSize: Math.max(2 * this.n + 2, 12) });
+                this.state.resetNovelty();
+                this.solver = new ConstraintSolver();
+                this.generator = new PremiseGenerator(this.state, this.solver, this.equivalence);
+                this.planner = new MatchPlanner(this.state.rng);
+                this.matchSchedule = this.planner.plan(this.totalTrials, this.n);
+                if (isFreshStart || this.resetOnRestart) {
+                    this.logger.reset();
+                }
+                this.currentPremises = [];
+
+                this.updateUI();
+                this.sessionToken += 1;
+                const currentSession = this.sessionToken;
+
+                while (this.trialIndex < this.totalTrials && this.gameRunning && currentSession === this.sessionToken) {
+                    await this.runTrial(currentSession);
+                    this.trialIndex += 1;
+                    this.updateUI();
+                }
+
+                if (currentSession === this.sessionToken) {
+                    this.stop();
                 }
             }
-            
-            async restart() {
-                const now = Date.now();
-                if (now - this.lastRestartClick < 250) return;
-                this.lastRestartClick = now;
-                
-                if (this.gameState === 'RUNNING') {
-                    await this.stop();
-                }
-                
-                const n = parseInt(document.getElementById('n-slider').value);
-                const k = parseInt(document.getElementById('k-slider').value);
-                const transitivity = document.getElementById('transitivity-toggle').checked;
-                this.resetSeedOnRestart = document.getElementById('reset-seed-toggle').checked;
-                
-                document.getElementById('status').textContent = 'Initializing...';
-                document.getElementById('feedback').textContent = '';
-                
-                await this.initialize(n, k, transitivity);
-                
-                this.gameState = 'RUNNING';
-                document.getElementById('status').textContent = 'Running...';
-                
-                this.updateButtonStates();
-                this.start();
-            }
-            
-            async stop() {
-                const now = Date.now();
-                if (now - this.lastStopClick < 250) return;
-                this.lastStopClick = now;
-                
-                this.gameState = 'STOPPED';
-                this.sessionToken++;
-                
-                await this.voice.cancelAndWait();
-                
+
+            stop() {
+                this.gameRunning = false;
+                this.awaitingResponse = false;
                 if (this.responseTimer) {
                     clearTimeout(this.responseTimer);
                     this.responseTimer = null;
                 }
-                
                 if (this.responseResolver) {
                     this.responseResolver(null);
                     this.responseResolver = null;
                 }
-                
-                this.awaitingResponse = false;
-                
                 document.getElementById('match-btn').disabled = true;
                 document.getElementById('no-match-btn').disabled = true;
                 document.getElementById('repeat-btn').disabled = true;
-                
-                document.getElementById('status').textContent = 'Stopped';
-                
-                this.updateButtonStates();
+                this.updateUI();
             }
-            
-            endGame() {
-                this.gameState = 'STOPPED';
-                document.getElementById('status').textContent = 'Game Complete!';
-                this.updateButtonStates();
-            }
-            
-            exportData() {
-                const data = {
-                    seed: this.state?.seed,
-                    voice: this.voice.getVoiceInfo(),
+
+            async runTrial(sessionToken) {
+                if (!this.gameRunning) return;
+
+                const plannedMatch = this.matchSchedule[this.trialIndex] || false;
+                const nBackIndex = this.trialIndex - this.n;
+                const nBackPremise = nBackIndex >= 0 ? this.currentPremises[nBackIndex] : null;
+                const middleAtoms = nBackIndex >= 0 ? this.state.getConstraintsInRange(nBackIndex + 1, this.trialIndex - 1) : [];
+                const cooldown = this.state.getActiveCooldown(this.trialIndex);
+
+                let result = this.generator.generate({
+                    trialIndex: this.trialIndex,
+                    k: this.k,
+                    n: this.n,
+                    plannedMatch,
+                    nBackPremise,
+                    middleAtoms,
+                    avoidLetters: plannedMatch ? cooldown : null,
+                    allowOverride: true
+                });
+
+                let plannerFlip = false;
+
+                if (!result && plannedMatch) {
+                    this.planner.forceFlip(this.trialIndex);
+                    plannerFlip = true;
+                    result = this.generator.generate({
+                        trialIndex: this.trialIndex,
+                        k: this.k,
+                        n: this.n,
+                        plannedMatch: false,
+                        nBackPremise,
+                        middleAtoms,
+                        avoidLetters: null,
+                        allowOverride: true
+                    });
+                }
+
+                if (!result) {
+                    this.stop();
+                    return;
+                }
+
+                const { premise, signatures, novelty, satResult, certificate } = result;
+                this.currentPremises.push(premise);
+                this.state.recordPremise(premise, premise.atoms, { plannedMatch, certificate });
+                this.state.novelty.register(signatures);
+                this.state.coordinates = satResult.coordinates;
+
+                document.getElementById('premise-display').textContent = premise.toString();
+                await this.voice.speakPremise(premise, sessionToken);
+                if (sessionToken !== this.sessionToken) return;
+
+                this.awaitingResponse = true;
+                this.responseStartTime = Date.now();
+
+                const response = await new Promise(resolve => {
+                    this.responseResolver = resolve;
+                    document.getElementById('match-btn').disabled = false;
+                    document.getElementById('no-match-btn').disabled = false;
+                    document.getElementById('repeat-btn').disabled = false;
+                    this.responseTimer = setTimeout(() => {
+                        if (this.responseResolver) {
+                            this.responseResolver(null);
+                            this.responseResolver = null;
+                        }
+                    }, this.secondsPerTrial * 1000);
+                });
+
+                if (sessionToken !== this.sessionToken) return;
+
+                this.awaitingResponse = false;
+                if (this.responseTimer) {
+                    clearTimeout(this.responseTimer);
+                    this.responseTimer = null;
+                }
+                document.getElementById('match-btn').disabled = true;
+                document.getElementById('no-match-btn').disabled = true;
+                document.getElementById('repeat-btn').disabled = true;
+
+                const certificateMatch = plannedMatch && certificate;
+                const actualMatch = Boolean(certificateMatch);
+                let correct = false;
+                let omission = false;
+
+                if (response === null) {
+                    omission = true;
+                    this.omissions += 1;
+                } else {
+                    correct = response === actualMatch;
+                    if (correct) {
+                        this.score += 1;
+                        this.correctResponses += 1;
+                    }
+                    this.totalResponses += 1;
+                    this.recentAccuracy.push(correct ? 1 : 0);
+                    if (this.recentAccuracy.length > this.M) {
+                        this.recentAccuracy.shift();
+                    }
+                }
+
+                const rt = response === null ? null : Date.now() - this.responseStartTime;
+                const feedbackEl = document.getElementById('feedback');
+                if (omission) {
+                    feedbackEl.textContent = 'Response window expired.';
+                    feedbackEl.className = 'feedback incorrect';
+                } else if (correct) {
+                    feedbackEl.textContent = 'Correct';
+                    feedbackEl.className = 'feedback correct';
+                } else {
+                    feedbackEl.textContent = 'Incorrect';
+                    feedbackEl.className = 'feedback incorrect';
+                }
+
+                if (actualMatch && certificate) {
+                    this.state.applyCooldown(Array.from(premise.getLetters()), this.trialIndex, this.n);
+                }
+
+                const logEntry = {
+                    seedSession: this.seedManager.sessionSeed,
+                    trialIndex: this.trialIndex,
                     n: this.n,
                     k: this.k,
-                    secondsPerTrial: this.secondsPerTrial,
-                    totalTrials: this.totalTrials,
-                    score: this.score,
-                    accuracy: this.correctResponses / this.totalResponses,
-                    trials: this.trialHistory
+                    letters: Array.from(premise.getLetters()).join(''),
+                    atomsCanonical: premise.toKey(),
+                    atomsMirrorCanonical: premise.mirrorKey(),
+                    isoSignature: premise.isoSignature(),
+                    plannedMatch,
+                    certificate: certificate || null,
+                    satStatus: satResult.ok,
+                    midWindowDerivable: certificate ? certificate.midWindowDerivable : false,
+                    noveltyScores: novelty.noveltyScores,
+                    response: { choice: response, correct, rtMs: rt, omission },
+                    cooldownLetters: Array.from(this.state.getActiveCooldown(this.trialIndex + 1)),
+                    plannerFlip: plannerFlip || this.planner.wasFlipped(this.trialIndex)
                 };
-                
+
+                this.logger.add(logEntry);
+                this.updateDebugPanel(logEntry);
+            }
+
+            updateDebugPanel(entry) {
+                const debug = document.getElementById('debug-content');
+                const el = document.createElement('div');
+                el.className = 'debug-premise';
+                el.textContent = `Trial ${entry.trialIndex}: ${entry.atomsCanonical} | Match=${entry.plannedMatch} | Response=${entry.response.choice}`;
+                debug.prepend(el);
+                while (debug.childElementCount > 20) {
+                    debug.removeChild(debug.lastChild);
+                }
+            }
+
+            handleResponse(isMatch) {
+                if (!this.awaitingResponse || !this.responseResolver) return;
+                if (this.responseTimer) {
+                    clearTimeout(this.responseTimer);
+                    this.responseTimer = null;
+                }
+                this.responseResolver(isMatch);
+                this.responseResolver = null;
+            }
+
+            async handleRepeat() {
+                if (!this.awaitingResponse) return;
+                if (this.responseTimer) {
+                    clearTimeout(this.responseTimer);
+                    this.responseTimer = null;
+                }
+                await this.voice.cancelAndWait();
+                await this.voice.speakPremise(this.currentPremises[this.trialIndex], this.sessionToken);
+                if (!this.awaitingResponse) return;
+                this.responseStartTime = Date.now();
+                this.responseTimer = setTimeout(() => {
+                    if (this.responseResolver) {
+                        this.responseResolver(null);
+                        this.responseResolver = null;
+                    }
+                }, this.secondsPerTrial * 1000);
+            }
+
+            exportData() {
+                const data = {
+                    seedSession: this.seedManager.sessionSeed,
+                    entries: this.logger.entries
+                };
                 const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `relational-nback-${Date.now()}.json`;
-                a.click();
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `imagi-world-session-${Date.now()}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
                 URL.revokeObjectURL(url);
             }
         }
 
-        // ============================================================================
-        // TESTING HARNESS
-        // ============================================================================
         class TestHarness {
             constructor() {
-                this.results = [];
+                this.seedManager = new SeedManager();
             }
-            
-            async runTests() {
-                this.results = [];
-                
-                await this.testSATSolver();
-                await this.testNoIdentity();
-                await this.testTransformationCost();
-                await this.testAnchoredOverlap();
-                await this.testConjunctiveParity();
-                await this.testAxisOrthogonality();
-                await this.testNonPeriodicSchedule();
-                
-                return this.results;
-            }
-            
-            async testSATSolver() {
-                const state = new GameState(12345);
-                const solver = new ConstraintSolver(state);
-                
-                state.coordinates.set('A', {x: 0, y: 0});
-                state.coordinates.set('B', {x: 0, y: 1});
-                
-                const atoms1 = [new Atom('N', 'B', 'A')];
-                const sat1 = solver.isSatisfiable(atoms1);
-                
-                this.results.push({
-                    test: 'SAT Solver - Satisfiable',
-                    passed: sat1,
-                    details: 'B north of A with B at (0,1), A at (0,0)'
-                });
-                
-                const atoms2 = [
-                    new Atom('N', 'A', 'B'),
-                    new Atom('S', 'A', 'B')
+
+            async runAll() {
+                return [
+                    await this.testNovelty(),
+                    await this.testContradictions(),
+                    await this.testCertificate(),
+                    await this.testInputGating(),
+                    await this.testProofExamples()
                 ];
-                const sat2 = solver.isSatisfiable(atoms2);
-                
-                this.results.push({
-                    test: 'SAT Solver - Unsatisfiable',
-                    passed: !sat2,
-                    details: 'A cannot be both north and south of B'
-                });
             }
-            
-            async testNoIdentity() {
-                const p1 = new Premise([new Atom('N', 'A', 'B')]);
-                const p2 = new Premise([new Atom('N', 'A', 'B')]);
-                const p3 = new Premise([new Atom('S', 'B', 'A')]);
-                
-                const state = new GameState(12345);
-                const solver = new ConstraintSolver(state);
-                const checker = new RuleChecker(state, solver);
-                
-                const identity = checker.checkNoIdentity(p1, p2);
-                const different = checker.checkNoIdentity(p1, p3);
-                
-                this.results.push({
-                    test: 'Rule 2 - No Identity',
-                    passed: !identity && different,
-                    details: 'Identical premises rejected, different premises accepted'
-                });
-            }
-            
-            async testTransformationCost() {
-                const p1 = new Premise([new Atom('N', 'A', 'B')]);
-                const p2 = new Premise([new Atom('N', 'A', 'B')]);
-                const p3 = new Premise([new Atom('S', 'B', 'A')]);
-                
-                const state = new GameState(12345);
-                const solver = new ConstraintSolver(state);
-                const checker = new RuleChecker(state, solver);
-                
-                const cost1 = checker.computeTransformationCost(p1, p2);
-                const cost2 = checker.computeTransformationCost(p1, p3);
-                
-                this.results.push({
-                    test: 'Rule 3 - Transformation Cost',
-                    passed: cost1 === 0 && cost2 === 1,
-                    details: `Identity cost=${cost1}, Inversion cost=${cost2}`
-                });
-            }
-            
-            async testAnchoredOverlap() {
-                const p1 = new Premise([new Atom('N', 'A', 'B')]);
-                const p2 = new Premise([new Atom('S', 'B', 'A')]);
-                const p3 = new Premise([new Atom('N', 'C', 'D')]);
-                
-                const state = new GameState(12345);
-                const solver = new ConstraintSolver(state);
-                const checker = new RuleChecker(state, solver);
-                
-                const overlap1 = checker.checkAnchoredOverlap(p1, p2);
-                const overlap2 = checker.checkAnchoredOverlap(p1, p3);
-                
-                this.results.push({
-                    test: 'Rule 5 - Anchored Overlap',
-                    passed: overlap1 && !overlap2,
-                    details: 'Same letters accepted, different letters rejected'
-                });
-            }
-            
-            async testConjunctiveParity() {
-                const p1 = new Premise([
-                    new Atom('N', 'A', 'B'),
-                    new Atom('E', 'A', 'C')
-                ]);
-                const p2 = new Premise([
-                    new Atom('S', 'B', 'A'),
-                    new Atom('W', 'C', 'A')
-                ]);
-                const p3 = new Premise([
-                    new Atom('S', 'B', 'A'),
-                    new Atom('W', 'D', 'A')
-                ]);
-                
-                const state = new GameState(12345);
-                const solver = new ConstraintSolver(state);
-                const checker = new RuleChecker(state, solver);
-                
-                const parity1 = checker.checkConjunctiveParity(p1, p2);
-                const parity2 = checker.checkConjunctiveParity(p1, p3);
-                
-                this.results.push({
-                    test: 'Rule 7 - Conjunctive Parity',
-                    passed: parity1 && !parity2,
-                    details: 'Same letters accepted, partial overlap rejected'
-                });
-            }
-            
-            async testAxisOrthogonality() {
-                const state = new GameState(12345);
-                const solver = new ConstraintSolver(state);
-                const checker = new RuleChecker(state, solver);
-                
-                const atoms1 = [new Atom('N', 'A', 'B')];
-                const orthog1 = checker.checkAxisOrthogonality(atoms1);
-                
-                state.addToConstraintStore([new Atom('N', 'A', 'B')]);
-                const atoms2 = [new Atom('S', 'A', 'B')];
-                const orthog2 = checker.checkAxisOrthogonality(atoms2);
-                
-                this.results.push({
-                    test: 'Rule 4 - Axis Orthogonality',
-                    passed: orthog1 && !orthog2,
-                    details: 'Single direction OK, contradicting directions rejected'
-                });
-            }
-            
-            async testNonPeriodicSchedule() {
-                const state = new GameState(12345);
-                const solver = new ConstraintSolver(state);
-                const checker = new RuleChecker(state, solver);
-                const generator = new PremiseGenerator(state, solver, checker);
-                
-                generator.scheduleMatches(100, 2);
-                
-                let isPeriodic = false;
-                for (let period = 2; period <= 10; period++) {
-                    let matches = 0;
-                    for (let i = period; i < generator.matchSchedule.length; i++) {
-                        if (generator.matchSchedule[i] === generator.matchSchedule[i - period]) {
-                            matches++;
+
+            async testNovelty() {
+                const seeds = [];
+                const firstPremises = new Set();
+                for (let i = 0; i < 5; i++) {
+                    const seed = this.seedManager.generateSessionSeed(false);
+                    seeds.push(seed);
+                    const state = new GameState(seed, { windowSize: 12 });
+                    const solver = new ConstraintSolver();
+                    const eq = new EquivalenceEngine(false);
+                    const generator = new PremiseGenerator(state, solver, eq);
+                    let unique = true;
+                    for (let trial = 0; trial < FIRST_N_NOVELTY; trial++) {
+                        const result = generator.generate({
+                            trialIndex: trial,
+                            k: 2,
+                            n: 2,
+                            plannedMatch: false,
+                            nBackPremise: null,
+                            middleAtoms: [],
+                            avoidLetters: null,
+                            allowOverride: false
+                        });
+                        if (!result) {
+                            unique = false;
+                            break;
                         }
-                    }
-                    if (matches > generator.matchSchedule.length * 0.8) {
-                        isPeriodic = true;
-                        break;
+                        const key = result.premise.toKey();
+                        if (firstPremises.has(key)) {
+                            unique = false;
+                        }
+                        firstPremises.add(key);
+                        state.novelty.register(state.novelty.buildSignatures(result.premise));
                     }
                 }
-                
-                this.results.push({
-                    test: 'Rule 9 - Non-Periodic Schedule',
-                    passed: !isPeriodic,
-                    details: 'Match schedule is not obviously periodic'
-                });
+                return {
+                    test: 'Novelty',
+                    passed: firstPremises.size >= seeds.length * FIRST_N_NOVELTY,
+                    details: 'First six premises differ across restarts'
+                };
+            }
+
+            async testContradictions() {
+                const state = new GameState(12345, { windowSize: 12 });
+                const solver = new ConstraintSolver();
+                const atoms = [new Atom('N', 'A', 'B'), new Atom('S', 'A', 'B')];
+                const sat = solver.evaluate([], atoms);
+                return {
+                    test: 'Constraint contradictions',
+                    passed: !sat.ok,
+                    details: 'Opposite relations rejected by SAT core'
+                };
+            }
+
+            async testCertificate() {
+                const premiseA = new Premise([new Atom('N', 'A', 'B'), new Atom('W', 'A', 'C')]);
+                const premiseB = new Premise([new Atom('S', 'B', 'A'), new Atom('E', 'C', 'A')]);
+                const eq = new EquivalenceEngine(false);
+                const certificate = eq.computeCertificate(premiseA, premiseB, []);
+                return {
+                    test: 'Certificate generation',
+                    passed: certificate.match && certificate.certificate.mapping.length === 2,
+                    details: 'Invertible mapping generated for 2-atom pair'
+                };
+            }
+
+            async testInputGating() {
+                const engine = new GameEngine();
+                await engine.voice.initialize();
+                engine.totalTrials = 0;
+                engine.correctResponses = 0;
+                engine.totalResponses = 0;
+                engine.omissions = 3;
+                engine.awaitingResponse = false;
+                const before = engine.score;
+                engine.handleResponse(true);
+                return {
+                    test: 'Input gating',
+                    passed: engine.score === before,
+                    details: 'No score change without active response window'
+                };
+            }
+
+            async testProofExamples() {
+                const eq = new EquivalenceEngine(false);
+                const p1 = new Premise([new Atom('N', 'A', 'B')]);
+                const mid = [new Atom('N', 'B', 'C')];
+                const p2 = new Premise([new Atom('N', 'A', 'C')]);
+                const cert = eq.computeCertificate(p1, p2, mid);
+                return {
+                    test: 'Proof-based equivalence',
+                    passed: !cert.match,
+                    details: 'Mid-window derivable relation rejected when transitivity off'
+                };
             }
         }
 
-        // ============================================================================
-        // UI INITIALIZATION
-        // ============================================================================
-        
         const engine = new GameEngine();
-        
-        async function initializeApp() {
-            document.getElementById('status').textContent = 'Initializing voice...';
-            
-            await engine.voice.initialize();
-            
-            document.getElementById('voice-info').innerHTML = 
-                `<strong>Voice:</strong> ${engine.voice.getVoiceInfo()}<br>` +
-                `<strong>Rate:</strong> ${engine.voice.rate.toFixed(2)} | <strong>Pitch:</strong> ${engine.voice.pitch.toFixed(2)}`;
-            
-            document.getElementById('status').textContent = 'Ready to start';
-            document.getElementById('restart-btn').disabled = false;
-            
-            const savedSPT = localStorage.getItem('relational-nback-secondsPerTrial');
-            if (savedSPT) {
-                const val = parseFloat(savedSPT);
-                document.getElementById('spt-slider').value = val;
-                document.getElementById('spt-number').value = val;
-                document.getElementById('spt-value').textContent = val.toFixed(1);
-            }
-        }
-        
-        initializeApp();
-        
-        document.getElementById('n-slider').addEventListener('input', (e) => {
-            document.getElementById('n-value').textContent = e.target.value;
-        });
-        
-        document.getElementById('k-slider').addEventListener('input', (e) => {
-            document.getElementById('k-value').textContent = e.target.value;
-        });
-        
-        document.getElementById('spt-slider').addEventListener('input', (e) => {
-            const val = parseFloat(e.target.value);
-            document.getElementById('spt-number').value = val;
-            document.getElementById('spt-value').textContent = val.toFixed(1);
-            engine.secondsPerTrial = val;
-            engine.saveSettings();
-        });
-        
-        document.getElementById('spt-number').addEventListener('input', (e) => {
-            const val = Math.max(2, Math.min(20, parseFloat(e.target.value) || 6));
-            document.getElementById('spt-slider').value = val;
-            document.getElementById('spt-value').textContent = val.toFixed(1);
-            engine.secondsPerTrial = val;
-            engine.saveSettings();
-        });
-        
-        document.getElementById('debug-toggle').addEventListener('change', (e) => {
-            document.getElementById('debug').hidden = !e.target.checked;
-            if (e.target.checked) {
-                engine.updateDebugPanel();
-            }
-        });
-        
-        document.getElementById('transitivity-toggle').addEventListener('change', (e) => {
-            engine.transitivityEnabled = e.target.checked;
-        });
-        
-        document.getElementById('restart-btn').addEventListener('click', () => {
-            engine.restart();
-        });
-        
-        document.getElementById('stop-btn').addEventListener('click', () => {
-            engine.stop();
-        });
-        
-        document.getElementById('repeat-btn').addEventListener('click', () => {
-            engine.handleRepeat();
-        });
-        
-        document.getElementById('match-btn').addEventListener('click', () => {
-            engine.handleResponse(true);
-        });
-        
-        document.getElementById('no-match-btn').addEventListener('click', () => {
-            engine.handleResponse(false);
-        });
-        
-        document.getElementById('preview-btn').addEventListener('click', async () => {
-            const previewPremise = new Premise([
-                new Atom('N', 'A', 'B'),
-                new Atom('W', 'A', 'C')
-            ]);
-            
-            await engine.voice.cancelAndWait();
-            await engine.voice.speakPremise(previewPremise, 0);
-        });
-        
-        document.addEventListener('keydown', (e) => {
-            if (!engine.awaitingResponse) return;
-            
-            if (e.code === 'Space') {
-                e.preventDefault();
-                engine.handleResponse(true);
-            } else if (e.code === 'Enter') {
-                e.preventDefault();
-                engine.handleResponse(false);
-            }
-        });
-        
-        document.getElementById('export-btn').addEventListener('click', () => {
-            engine.exportData();
-        });
-        
-        document.getElementById('test-btn').addEventListener('click', async () => {
-            const testPanel = document.getElementById('test-panel');
-            const testResults = document.getElementById('test-results');
-            
-            testPanel.hidden = false;
-            testResults.innerHTML = '<p>Running tests...</p>';
-            
-            const harness = new TestHarness();
-            const results = await harness.runTests();
-            
-            testResults.innerHTML = results.map(r => {
-                const className = r.passed ? 'pass' : 'fail';
-                const symbol = r.passed ? '✓' : '✗';
-                return `<div class="test-result ${className}">
-                    ${symbol} ${r.test}: ${r.details}
-                </div>`;
-            }).join('');
-        });
+        engine.initialize();
     </script>
 </body>
 </html>
