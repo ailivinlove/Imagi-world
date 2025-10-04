@@ -89,12 +89,38 @@
             outline-offset: 2px;
         }
 
+        input[type="number"] {
+            width: 80px;
+            padding: 8px;
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #1a4d7a;
+            border-radius: 6px;
+            font-size: 1rem;
+            margin-left: 10px;
+        }
+
+        input[type="number"]:focus {
+            outline: 2px solid #e94560;
+            outline-offset: 2px;
+        }
+
         .range-value {
             display: inline-block;
             min-width: 30px;
             text-align: right;
             font-weight: bold;
             color: #e94560;
+        }
+
+        .dual-control {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .dual-control input[type="range"] {
+            flex: 1;
         }
 
         button {
@@ -138,6 +164,22 @@
 
         button.secondary:hover:not(:disabled) {
             background: #1a4d7a;
+        }
+
+        button.danger {
+            background: #c0392b;
+        }
+
+        button.danger:hover:not(:disabled) {
+            background: #a93226;
+        }
+
+        button.success {
+            background: #27ae60;
+        }
+
+        button.success:hover:not(:disabled) {
+            background: #229954;
         }
 
         .game-area {
@@ -322,6 +364,12 @@
             color: #e94560;
         }
 
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
         @media (max-width: 600px) {
             .stats {
                 grid-template-columns: 1fr 1fr;
@@ -349,8 +397,11 @@
             </div>
             
             <div class="control-group">
-                <label>Speech Rate: <span class="range-value" id="rate-value">0.95</span></label>
-                <input type="range" id="rate-slider" min="0.85" max="1.05" step="0.05" value="0.95">
+                <label>Seconds per Trial: <span class="range-value" id="spt-value">6.0</span> s</label>
+                <div class="dual-control">
+                    <input type="range" id="spt-slider" min="2" max="20" step="0.5" value="6.0">
+                    <input type="number" id="spt-number" min="2" max="20" step="0.5" value="6.0">
+                </div>
             </div>
             
             <div class="control-group checkbox-group">
@@ -359,17 +410,26 @@
             </div>
             
             <div class="control-group checkbox-group">
+                <input type="checkbox" id="reset-seed-toggle">
+                <label for="reset-seed-toggle" style="margin-bottom: 0;">Reset Seed & Logs on Restart</label>
+            </div>
+            
+            <div class="control-group checkbox-group">
                 <input type="checkbox" id="debug-toggle">
                 <label for="debug-toggle" style="margin-bottom: 0;">Show Debug Panel</label>
             </div>
             
             <div style="margin-top: 20px;">
-                <button id="start-btn" disabled>Start Game</button>
-                <button id="pause-btn" class="secondary" disabled>Pause</button>
-                <button id="repeat-btn" class="secondary" disabled>Repeat Audio</button>
-                <button id="preview-btn" class="secondary">Voice Preview</button>
-                <button id="test-btn" class="secondary">Run Tests</button>
-                <button id="export-btn" class="secondary">Export Data</button>
+                <div class="button-group">
+                    <button id="restart-btn" class="success" disabled>Restart</button>
+                    <button id="stop-btn" class="danger" disabled>Stop</button>
+                    <button id="repeat-btn" class="secondary" disabled>Repeat Audio</button>
+                    <button id="preview-btn" class="secondary">Voice Preview</button>
+                </div>
+                <div class="button-group">
+                    <button id="test-btn" class="secondary">Run Tests</button>
+                    <button id="export-btn" class="secondary">Export Data</button>
+                </div>
             </div>
             
             <div class="voice-info" id="voice-info">Initializing voice...</div>
@@ -620,7 +680,7 @@
                     if (a1.head === a2.head) {
                         return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}, and ${relMap[a2.axis]} ${a2.tail}.`;
                     } else {
-                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}; ${a2.head} is ${relMap[a2.axis]} ${a2.tail}.`;
+                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}, and ${a2.head} is ${relMap[a2.axis]} ${a2.tail}.`;
                     }
                 }
                 
@@ -629,41 +689,52 @@
                     const a2 = this.atoms[1];
                     const a3 = this.atoms[2];
                     
-                    if (a1.head === a2.head && a2.head === a3.head) {
-                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}, ${relMap[a2.axis]} ${a2.tail}, and ${relMap[a3.axis]} ${a3.tail}.`;
-                    } else if (a1.head === a2.head) {
-                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}, and ${relMap[a2.axis]} ${a2.tail}; ${a3.head} is ${relMap[a3.axis]} ${a3.tail}.`;
+                    const byHead = new Map();
+                    this.atoms.forEach(a => {
+                        if (!byHead.has(a.head)) byHead.set(a.head, []);
+                        byHead.get(a.head).push(a);
+                    });
+                    
+                    if (byHead.size === 1) {
+                        const head = Array.from(byHead.keys())[0];
+                        const atoms = byHead.get(head);
+                        return `${head} is ${atoms.map(a => `${relMap[a.axis]} ${a.tail}`).join(', and ')}.`;
+                    } else if (byHead.size === 2) {
+                        const heads = Array.from(byHead.keys());
+                        const parts = heads.map(head => {
+                            const atoms = byHead.get(head);
+                            if (atoms.length === 1) {
+                                return `${head} is ${relMap[atoms[0].axis]} ${atoms[0].tail}`;
+                            } else {
+                                return `${head} is ${atoms.map(a => `${relMap[a.axis]} ${a.tail}`).join(', and ')}`;
+                            }
+                        });
+                        return parts.join(', and ') + '.';
                     } else {
-                        return `${a1.head} is ${relMap[a1.axis]} ${a1.tail}; ${a2.head} is ${relMap[a2.axis]} ${a2.tail}; ${a3.head} is ${relMap[a3.axis]} ${a3.tail}.`;
+                        return this.atoms.map(a => `${a.head} is ${relMap[a.axis]} ${a.tail}`).join(', and ') + '.';
                     }
                 }
                 
                 if (this.atoms.length === 4) {
-                    const a1 = this.atoms[0];
-                    const a2 = this.atoms[1];
-                    const a3 = this.atoms[2];
-                    const a4 = this.atoms[3];
+                    const byHead = new Map();
+                    this.atoms.forEach(a => {
+                        if (!byHead.has(a.head)) byHead.set(a.head, []);
+                        byHead.get(a.head).push(a);
+                    });
                     
-                    const pairs = [];
-                    if (a1.head === a2.head) {
-                        pairs.push(`${a1.head} is ${relMap[a1.axis]} ${a1.tail}, and ${relMap[a2.axis]} ${a2.tail}`);
-                        if (a3.head === a4.head) {
-                            pairs.push(`${a3.head} is ${relMap[a3.axis]} ${a3.tail}, and ${relMap[a4.axis]} ${a4.tail}`);
+                    const parts = [];
+                    for (const [head, atoms] of byHead) {
+                        if (atoms.length === 1) {
+                            parts.push(`${head} is ${relMap[atoms[0].axis]} ${atoms[0].tail}`);
                         } else {
-                            pairs.push(`${a3.head} is ${relMap[a3.axis]} ${a3.tail}`);
-                            pairs.push(`${a4.head} is ${relMap[a4.axis]} ${a4.tail}`);
+                            parts.push(`${head} is ${atoms.map(a => `${relMap[a.axis]} ${a.tail}`).join(', and ')}`);
                         }
-                    } else {
-                        pairs.push(`${a1.head} is ${relMap[a1.axis]} ${a1.tail}`);
-                        pairs.push(`${a2.head} is ${relMap[a2.axis]} ${a2.tail}`);
-                        pairs.push(`${a3.head} is ${relMap[a3.axis]} ${a3.tail}`);
-                        pairs.push(`${a4.head} is ${relMap[a4.axis]} ${a4.tail}`);
                     }
                     
-                    return pairs.join('; ') + '.';
+                    return parts.join(', and ') + '.';
                 }
                 
-                return this.atoms.map(a => `${a.head} is ${relMap[a.axis]} ${a.tail}`).join('; ') + '.';
+                return this.atoms.map(a => `${a.head} is ${relMap[a.axis]} ${a.tail}`).join(', and ') + '.';
             }
         }
 
@@ -956,7 +1027,6 @@
                 this.solver = solver;
                 this.ruleChecker = ruleChecker;
                 this.matchSchedule = [];
-                this.lastRhythm = [];
             }
             
             scheduleMatches(totalSteps, n) {
@@ -1164,15 +1234,15 @@
         }
 
         // ============================================================================
-        // VOICE SYNTHESIS - SINGLE FEMININE VOICE, SMOOTH PROSODY
+        // VOICE SYNTHESIS - ANGELIC SINGLE FEMININE VOICE
         // ============================================================================
         class VoiceSynthesis {
             constructor() {
                 this.synth = window.speechSynthesis;
                 this.VOX = null;
                 this.voiceReady = false;
-                this.pitch = 1.15;
-                this.rate = 0.95;
+                this.pitch = 1.20;
+                this.rate = 0.90;
                 this.volume = 1.0;
                 
                 this.speechQueue = [];
@@ -1193,7 +1263,8 @@
                                 this.voiceReady = true;
                                 
                                 try {
-                                    localStorage.setItem('relational-nback-voice', this.VOX.name);
+                                    localStorage.setItem('relational-nback-voice-name', this.VOX.name);
+                                    localStorage.setItem('relational-nback-voice-lang', this.VOX.lang);
                                 } catch (e) {
                                     console.warn('Could not persist voice to localStorage');
                                 }
@@ -1231,9 +1302,11 @@
             }
             
             selectFeminineVoice(voices) {
-                const storedVoiceName = localStorage.getItem('relational-nback-voice');
-                if (storedVoiceName) {
-                    const stored = voices.find(v => v.name === storedVoiceName);
+                const storedName = localStorage.getItem('relational-nback-voice-name');
+                const storedLang = localStorage.getItem('relational-nback-voice-lang');
+                
+                if (storedName && storedLang) {
+                    const stored = voices.find(v => v.name === storedName && v.lang === storedLang);
                     if (stored) {
                         this.VOX = stored;
                         return;
@@ -1243,8 +1316,9 @@
                 const localePreferences = ['en-AU', 'en-GB', 'en-US'];
                 
                 const femininePriority = [
-                    'Aria', 'Jenny', 'Sonia', 'Natasha', 'Neural', 'Online (Natural)',
-                    'Samantha', 'Karen', 'Tessa', 'Serena',
+                    'Karen', 'Natasha', 'Sonia', 'Serena', 
+                    'Aria', 'Jenny', 'Samantha',
+                    'Online (Natural)', 'Neural',
                     'Google UK English Female', 'Google US English'
                 ];
                 
@@ -1285,9 +1359,9 @@
                 return `${this.VOX.name} (${this.VOX.lang})`;
             }
             
-            async speak(text) {
+            async speak(text, sessionToken) {
                 return new Promise((resolve) => {
-                    this.speechQueue.push({ text, resolve });
+                    this.speechQueue.push({ text, resolve, sessionToken });
                     this.processQueue();
                 });
             }
@@ -1298,9 +1372,9 @@
                 }
                 
                 this.isSpeaking = true;
-                const { text, resolve } = this.speechQueue.shift();
+                const { text, resolve, sessionToken } = this.speechQueue.shift();
                 
-                await this.speakSingle(text);
+                await this.speakSingle(text, sessionToken);
                 
                 resolve();
                 this.isSpeaking = false;
@@ -1310,7 +1384,7 @@
                 }, 100);
             }
             
-            async speakSingle(text) {
+            async speakSingle(text, sessionToken) {
                 return new Promise((resolve) => {
                     if (!this.VOX) {
                         console.error('VOX not initialized');
@@ -1318,29 +1392,31 @@
                         return;
                     }
                     
-                    const utterance = new SpeechSynthesisUtterance(text);
-                    utterance.voice = this.VOX;
-                    utterance.lang = this.VOX.lang;
-                    utterance.rate = this.rate;
-                    utterance.pitch = this.pitch;
-                    utterance.volume = this.volume;
-                    
-                    utterance.onend = () => {
-                        resolve();
-                    };
-                    
-                    utterance.onerror = (event) => {
-                        console.error('Speech synthesis error:', event);
-                        resolve();
-                    };
-                    
-                    this.synth.speak(utterance);
+                    setTimeout(() => {
+                        const utterance = new SpeechSynthesisUtterance(text);
+                        utterance.voice = this.VOX;
+                        utterance.lang = this.VOX.lang;
+                        utterance.rate = Math.max(0.88, Math.min(0.98, this.rate));
+                        utterance.pitch = Math.max(1.12, Math.min(1.25, this.pitch));
+                        utterance.volume = this.volume;
+                        
+                        utterance.onend = () => {
+                            resolve();
+                        };
+                        
+                        utterance.onerror = (event) => {
+                            console.error('Speech synthesis error:', event);
+                            resolve();
+                        };
+                        
+                        this.synth.speak(utterance);
+                    }, 120 + Math.random() * 60);
                 });
             }
             
-            async speakPremise(premise) {
+            async speakPremise(premise, sessionToken) {
                 const text = premise.toNaturalSpeech();
-                await this.speak(text);
+                await this.speak(text, sessionToken);
             }
             
             cancel() {
@@ -1361,20 +1437,32 @@
             }
             
             setRate(rate) {
-                this.rate = Math.max(0.85, Math.min(1.05, rate));
+                this.rate = Math.max(0.88, Math.min(0.98, rate));
             }
             
-            adaptRate(avgResponseTime) {
-                if (avgResponseTime > 4000) {
-                    this.setRate(this.rate - 0.05);
-                } else if (avgResponseTime < 2000) {
-                    this.setRate(this.rate + 0.05);
+            adaptRate(recentRTs, recentAccuracy) {
+                if (recentRTs.length < 10) return;
+                
+                const medianRT = this.calculateMedian(recentRTs.slice(-10));
+                const avgAccuracy = recentAccuracy.slice(-10).reduce((a, b) => a + b, 0) / Math.min(10, recentAccuracy.length);
+                
+                if (medianRT < 1200 && avgAccuracy >= 0.90) {
+                    this.setRate(this.rate + 0.02);
+                } else if (medianRT > 2800 || avgAccuracy <= 0.65) {
+                    this.setRate(this.rate - 0.02);
                 }
+            }
+            
+            calculateMedian(arr) {
+                if (arr.length === 0) return 0;
+                const sorted = [...arr].sort((a, b) => a - b);
+                const mid = Math.floor(sorted.length / 2);
+                return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
             }
         }
 
         // ============================================================================
-        // GAME ENGINE
+        // GAME ENGINE - STATE MACHINE WITH SESSION TOKENS
         // ============================================================================
         class GameEngine {
             constructor() {
@@ -1384,15 +1472,18 @@
                 this.generator = null;
                 this.voice = new VoiceSynthesis();
                 
-                this.isRunning = false;
-                this.isPaused = false;
+                this.gameState = 'STOPPED';
+                this.sessionToken = 0;
+                
                 this.n = 2;
                 this.k = 1;
+                this.secondsPerTrial = 6.0;
                 this.totalTrials = 50;
                 this.currentTrial = 0;
                 
                 this.trialHistory = [];
                 this.recentAccuracy = [];
+                this.recentRTs = [];
                 this.M = 20;
                 
                 this.score = 0;
@@ -1403,9 +1494,35 @@
                 this.lastPremise = null;
                 this.awaitingResponse = false;
                 this.responseStartTime = 0;
-                this.lastReplayUsed = false;
+                this.responseTimer = null;
+                this.hasRepeated = false;
                 
                 this.transitivityEnabled = false;
+                this.resetSeedOnRestart = false;
+                
+                this.lastRestartClick = 0;
+                this.lastStopClick = 0;
+                
+                this.loadSettings();
+            }
+            
+            loadSettings() {
+                try {
+                    const saved = localStorage.getItem('relational-nback-secondsPerTrial');
+                    if (saved) {
+                        this.secondsPerTrial = parseFloat(saved);
+                    }
+                } catch (e) {
+                    console.warn('Could not load settings from localStorage');
+                }
+            }
+            
+            saveSettings() {
+                try {
+                    localStorage.setItem('relational-nback-secondsPerTrial', this.secondsPerTrial.toString());
+                } catch (e) {
+                    console.warn('Could not save settings to localStorage');
+                }
             }
             
             async initialize(n, k, transitivityEnabled = false) {
@@ -1413,7 +1530,9 @@
                 this.k = k;
                 this.transitivityEnabled = transitivityEnabled;
                 
-                this.state = new GameState(Date.now());
+                const seed = this.resetSeedOnRestart ? Date.now() : (this.state?.seed || Date.now());
+                
+                this.state = new GameState(seed);
                 this.solver = new ConstraintSolver(this.state);
                 this.ruleChecker = new RuleChecker(this.state, this.solver, transitivityEnabled);
                 this.generator = new PremiseGenerator(this.state, this.solver, this.ruleChecker);
@@ -1422,34 +1541,40 @@
                 
                 this.currentTrial = 0;
                 this.premises = [];
-                this.trialHistory = [];
-                this.score = 0;
-                this.correctResponses = 0;
-                this.totalResponses = 0;
-                this.recentAccuracy = [];
+                
+                if (this.resetSeedOnRestart) {
+                    this.trialHistory = [];
+                    this.score = 0;
+                    this.correctResponses = 0;
+                    this.totalResponses = 0;
+                    this.recentAccuracy = [];
+                    this.recentRTs = [];
+                }
             }
             
             async start() {
-                this.isRunning = true;
-                this.isPaused = false;
-                this.updateUI();
+                this.gameState = 'RUNNING';
+                this.sessionToken++;
+                const currentSession = this.sessionToken;
                 
-                while (this.currentTrial < this.totalTrials && this.isRunning) {
-                    if (this.isPaused) {
-                        await new Promise(resolve => setTimeout(resolve, 100));
-                        continue;
-                    }
+                this.updateUI();
+                this.updateButtonStates();
+                
+                while (this.currentTrial < this.totalTrials && this.gameState === 'RUNNING' && currentSession === this.sessionToken) {
+                    if (this.gameState !== 'RUNNING') break;
                     
-                    await this.runTrial();
+                    await this.runTrial(currentSession);
                     this.currentTrial++;
                 }
                 
-                if (this.isRunning) {
+                if (this.gameState === 'RUNNING' && currentSession === this.sessionToken) {
                     this.endGame();
                 }
             }
             
-            async runTrial() {
+            async runTrial(sessionToken) {
+                if (sessionToken !== this.sessionToken) return;
+                
                 const shouldMatch = this.currentTrial >= this.n && 
                                    this.generator.matchSchedule[this.currentTrial];
                 
@@ -1476,13 +1601,18 @@
                 document.getElementById('premise-display').textContent = premise.toString();
                 
                 this.lastPremise = premise;
-                this.lastReplayUsed = false;
-                await this.voice.speakPremise(premise);
+                this.hasRepeated = false;
+                
+                await this.voice.speakPremise(premise, sessionToken);
+                
+                if (sessionToken !== this.sessionToken) return;
                 
                 this.awaitingResponse = true;
                 this.responseStartTime = Date.now();
                 
-                const response = await this.waitForResponse();
+                const response = await this.waitForResponse(sessionToken);
+                
+                if (sessionToken !== this.sessionToken) return;
                 
                 this.awaitingResponse = false;
                 
@@ -1506,8 +1636,11 @@
                     response: response,
                     correct: correct,
                     rt: rt,
-                    replayUsed: this.lastReplayUsed
+                    repeated: this.hasRepeated
                 });
+                
+                this.recentRTs.push(rt);
+                if (this.recentRTs.length > 20) this.recentRTs.shift();
                 
                 this.showFeedback(correct);
                 
@@ -1522,10 +1655,14 @@
                 
                 this.updateUI();
                 
-                const medianRT = this.calculateMedianRT();
-                const interTrialInterval = Math.min(1400, Math.max(1000, medianRT * 0.3));
-                await new Promise(resolve => setTimeout(resolve, interTrialInterval));
-                document.getElementById('feedback').textContent = '';
+                const interPremiseGap = 800 + Math.random() * 400;
+                await new Promise(resolve => setTimeout(() => {
+                    if (sessionToken === this.sessionToken) resolve();
+                }, interPremiseGap));
+                
+                if (sessionToken === this.sessionToken) {
+                    document.getElementById('feedback').textContent = '';
+                }
             }
             
             checkIfMatch(currentTrialIndex) {
@@ -1544,7 +1681,7 @@
                 return matchCheck.valid;
             }
             
-            waitForResponse() {
+            waitForResponse(sessionToken) {
                 return new Promise((resolve) => {
                     this.responseResolver = resolve;
                     
@@ -1552,22 +1689,24 @@
                     document.getElementById('no-match-btn').disabled = false;
                     document.getElementById('repeat-btn').disabled = false;
                     
-                    const medianRT = this.calculateMedianRT();
-                    const timeout = Math.max(8000, medianRT * 3.5);
+                    const timeoutMs = this.secondsPerTrial * 1000;
                     
-                    this.responseTimeout = setTimeout(() => {
-                        if (this.responseResolver) {
+                    this.responseTimer = setTimeout(() => {
+                        if (this.responseResolver && sessionToken === this.sessionToken) {
                             this.responseResolver(null);
                             this.responseResolver = null;
                         }
-                    }, timeout);
+                    }, timeoutMs);
                 });
             }
             
             handleResponse(isMatch) {
                 if (!this.awaitingResponse || !this.responseResolver) return;
                 
-                clearTimeout(this.responseTimeout);
+                if (this.responseTimer) {
+                    clearTimeout(this.responseTimer);
+                    this.responseTimer = null;
+                }
                 
                 document.getElementById('match-btn').disabled = true;
                 document.getElementById('no-match-btn').disabled = true;
@@ -1578,30 +1717,34 @@
             }
             
             async handleRepeat() {
-                if (!this.awaitingResponse || !this.lastPremise) return;
-                if (this.lastReplayUsed) return;
+                if (!this.awaitingResponse || !this.lastPremise || this.hasRepeated) return;
                 
-                this.lastReplayUsed = true;
+                this.hasRepeated = true;
+                
+                if (this.responseTimer) {
+                    clearTimeout(this.responseTimer);
+                    this.responseTimer = null;
+                }
                 
                 await this.voice.cancelAndWait();
-                await this.voice.speakPremise(this.lastPremise);
-            }
-            
-            calculateMedianRT() {
-                const rts = this.trialHistory
-                    .filter(t => t.rt && t.response !== null)
-                    .map(t => t.rt)
-                    .sort((a, b) => a - b);
                 
-                if (rts.length === 0) return 3000;
+                const currentSession = this.sessionToken;
+                await this.voice.speakPremise(this.lastPremise, currentSession);
                 
-                const mid = Math.floor(rts.length / 2);
-                return rts.length % 2 === 0 ? (rts[mid - 1] + rts[mid]) / 2 : rts[mid];
+                if (currentSession !== this.sessionToken) return;
+                
+                this.responseStartTime = Date.now();
+                
+                const timeoutMs = this.secondsPerTrial * 1000;
+                this.responseTimer = setTimeout(() => {
+                    if (this.responseResolver && currentSession === this.sessionToken) {
+                        this.responseResolver(null);
+                        this.responseResolver = null;
+                    }
+                }, timeoutMs);
             }
             
             adaptDifficulty() {
-                const acc = this.recentAccuracy.reduce((a, b) => a + b, 0) / this.recentAccuracy.length;
-                
                 if (this.recentAccuracy.length >= this.M * 2) {
                     const window1 = this.recentAccuracy.slice(-this.M * 2, -this.M);
                     const window2 = this.recentAccuracy.slice(-this.M);
@@ -1630,8 +1773,7 @@
                     }
                 }
                 
-                const avgRT = this.calculateMedianRT();
-                this.voice.adaptRate(avgRT);
+                this.voice.adaptRate(this.recentRTs, this.recentAccuracy);
             }
             
             recordTrial(data) {
@@ -1663,6 +1805,19 @@
                 document.getElementById('k-value').textContent = this.k;
             }
             
+            updateButtonStates() {
+                const restartBtn = document.getElementById('restart-btn');
+                const stopBtn = document.getElementById('stop-btn');
+                
+                if (this.gameState === 'RUNNING') {
+                    restartBtn.disabled = false;
+                    stopBtn.disabled = false;
+                } else if (this.gameState === 'STOPPED') {
+                    restartBtn.disabled = false;
+                    stopBtn.disabled = true;
+                }
+            }
+            
             updateDebugPanel() {
                 if (!document.getElementById('debug').hidden) {
                     const content = document.getElementById('debug-content');
@@ -1677,33 +1832,76 @@
                 }
             }
             
-            pause() {
-                this.isPaused = true;
-                this.voice.cancel();
+            async restart() {
+                const now = Date.now();
+                if (now - this.lastRestartClick < 250) return;
+                this.lastRestartClick = now;
+                
+                if (this.gameState === 'RUNNING') {
+                    await this.stop();
+                }
+                
+                const n = parseInt(document.getElementById('n-slider').value);
+                const k = parseInt(document.getElementById('k-slider').value);
+                const transitivity = document.getElementById('transitivity-toggle').checked;
+                this.resetSeedOnRestart = document.getElementById('reset-seed-toggle').checked;
+                
+                document.getElementById('status').textContent = 'Initializing...';
+                document.getElementById('feedback').textContent = '';
+                
+                await this.initialize(n, k, transitivity);
+                
+                this.gameState = 'RUNNING';
+                document.getElementById('status').textContent = 'Running...';
+                
+                this.updateButtonStates();
+                this.start();
             }
             
-            resume() {
-                this.isPaused = false;
-            }
-            
-            stop() {
-                this.isRunning = false;
-                this.voice.cancel();
+            async stop() {
+                const now = Date.now();
+                if (now - this.lastStopClick < 250) return;
+                this.lastStopClick = now;
+                
+                this.gameState = 'STOPPED';
+                this.sessionToken++;
+                
+                await this.voice.cancelAndWait();
+                
+                if (this.responseTimer) {
+                    clearTimeout(this.responseTimer);
+                    this.responseTimer = null;
+                }
+                
+                if (this.responseResolver) {
+                    this.responseResolver(null);
+                    this.responseResolver = null;
+                }
+                
+                this.awaitingResponse = false;
+                
+                document.getElementById('match-btn').disabled = true;
+                document.getElementById('no-match-btn').disabled = true;
+                document.getElementById('repeat-btn').disabled = true;
+                
+                document.getElementById('status').textContent = 'Stopped';
+                
+                this.updateButtonStates();
             }
             
             endGame() {
-                this.isRunning = false;
+                this.gameState = 'STOPPED';
                 document.getElementById('status').textContent = 'Game Complete!';
-                document.getElementById('start-btn').disabled = false;
-                document.getElementById('pause-btn').disabled = true;
+                this.updateButtonStates();
             }
             
             exportData() {
                 const data = {
-                    seed: this.state.seed,
+                    seed: this.state?.seed,
                     voice: this.voice.getVoiceInfo(),
                     n: this.n,
                     k: this.k,
+                    secondsPerTrial: this.secondsPerTrial,
                     totalTrials: this.totalTrials,
                     score: this.score,
                     accuracy: this.correctResponses / this.totalResponses,
@@ -1917,10 +2115,19 @@
             await engine.voice.initialize();
             
             document.getElementById('voice-info').innerHTML = 
-                `<strong>Voice:</strong> ${engine.voice.getVoiceInfo()}`;
+                `<strong>Voice:</strong> ${engine.voice.getVoiceInfo()}<br>` +
+                `<strong>Rate:</strong> ${engine.voice.rate.toFixed(2)} | <strong>Pitch:</strong> ${engine.voice.pitch.toFixed(2)}`;
             
             document.getElementById('status').textContent = 'Ready to start';
-            document.getElementById('start-btn').disabled = false;
+            document.getElementById('restart-btn').disabled = false;
+            
+            const savedSPT = localStorage.getItem('relational-nback-secondsPerTrial');
+            if (savedSPT) {
+                const val = parseFloat(savedSPT);
+                document.getElementById('spt-slider').value = val;
+                document.getElementById('spt-number').value = val;
+                document.getElementById('spt-value').textContent = val.toFixed(1);
+            }
         }
         
         initializeApp();
@@ -1933,10 +2140,20 @@
             document.getElementById('k-value').textContent = e.target.value;
         });
         
-        document.getElementById('rate-slider').addEventListener('input', (e) => {
-            const rate = parseFloat(e.target.value);
-            document.getElementById('rate-value').textContent = rate.toFixed(2);
-            engine.voice.setRate(rate);
+        document.getElementById('spt-slider').addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            document.getElementById('spt-number').value = val;
+            document.getElementById('spt-value').textContent = val.toFixed(1);
+            engine.secondsPerTrial = val;
+            engine.saveSettings();
+        });
+        
+        document.getElementById('spt-number').addEventListener('input', (e) => {
+            const val = Math.max(2, Math.min(20, parseFloat(e.target.value) || 6));
+            document.getElementById('spt-slider').value = val;
+            document.getElementById('spt-value').textContent = val.toFixed(1);
+            engine.secondsPerTrial = val;
+            engine.saveSettings();
         });
         
         document.getElementById('debug-toggle').addEventListener('change', (e) => {
@@ -1950,31 +2167,12 @@
             engine.transitivityEnabled = e.target.checked;
         });
         
-        document.getElementById('start-btn').addEventListener('click', async () => {
-            const n = parseInt(document.getElementById('n-slider').value);
-            const k = parseInt(document.getElementById('k-slider').value);
-            const transitivity = document.getElementById('transitivity-toggle').checked;
-            
-            document.getElementById('start-btn').disabled = true;
-            document.getElementById('pause-btn').disabled = false;
-            document.getElementById('status').textContent = 'Initializing...';
-            
-            await engine.initialize(n, k, transitivity);
-            
-            document.getElementById('status').textContent = 'Running...';
-            document.getElementById('feedback').textContent = '';
-            
-            engine.start();
+        document.getElementById('restart-btn').addEventListener('click', () => {
+            engine.restart();
         });
         
-        document.getElementById('pause-btn').addEventListener('click', () => {
-            if (engine.isPaused) {
-                engine.resume();
-                document.getElementById('pause-btn').textContent = 'Pause';
-            } else {
-                engine.pause();
-                document.getElementById('pause-btn').textContent = 'Resume';
-            }
+        document.getElementById('stop-btn').addEventListener('click', () => {
+            engine.stop();
         });
         
         document.getElementById('repeat-btn').addEventListener('click', () => {
@@ -1996,7 +2194,7 @@
             ]);
             
             await engine.voice.cancelAndWait();
-            await engine.voice.speakPremise(previewPremise);
+            await engine.voice.speakPremise(previewPremise, 0);
         });
         
         document.addEventListener('keydown', (e) => {
