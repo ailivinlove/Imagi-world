@@ -519,6 +519,32 @@
             line-height: 1.6;
         }
 
+        #examplesFilters {
+            margin: .5rem 0 1rem;
+            display: flex;
+            gap: .5rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        #examplesFilters button.active {
+            font-weight: 700;
+            text-decoration: underline;
+        }
+
+        #examplesList > li {
+            margin: 0 0 1rem 0;
+            padding: .75rem;
+            border: 1px solid var(--border, #ddd);
+            border-radius: .5rem;
+        }
+
+        .exActions {
+            display: flex;
+            gap: .5rem;
+            margin-top: .5rem;
+        }
+
         #instFooter {
             display: flex;
             align-items: center;
@@ -866,11 +892,9 @@
                 title: 'Guided Examples',
                 html: `
                     <h3>Guided Examples</h3>
-                    <p><strong>Example A (single atom):</strong><br>Premise: “N is north of J.”<br>Anchor <code>J := Candle</code>. Up-shift → <code>N := Fireworks</code>. Coherence: higher intensity → ✓.</p>
-                    <p><strong>Example B (two atoms, same head):</strong><br>Premise: “Z is south of J; Z is west of P.”<br>Anchor <code>J := Theory</code>, <code>P := Order</code>. Then: <code>Z := Example</code> (down from Theory) and also <code>Z := Chaos</code> (opposite of Order). If a single symbol must satisfy both, reconcile by <strong>compound mapping</strong>: <code>Z := “Chaotic example”</code>. Log the compound so you can revisit it.</p>
-                    <p><strong>Example C (four atoms, your earlier case):</strong><br>“H is east of R; Y is north of X; R is south of Y; Z is west of X.”<br>A consistent set: <code>X := Fact</code>, <code>Y := Theory</code>, <code>R := Example</code>, <code>H := Case study</code>, <code>Z := Fiction</code>.<br>Practice until this becomes fluid and fast.</p>
+                    <p>The worked library loads in a moment. Use it to study beginner-friendly mappings across every compass move.</p>
                 `,
-                speech: 'Guided Examples. Example A, single atom. Premise: N is north of J. Anchor J as Candle. Up-shift to set N as Fireworks. Coherence: higher intensity, confirmed. Example B, two atoms with the same head. Premise: Z is south of J; Z is west of P. Anchor J as Theory and P as Order. Then Z equals Example, down from Theory, and also Z equals Chaos, opposite of Order. When a single symbol must satisfy both, reconcile by compound mapping: Z equals Chaotic example. Log the compound so you can revisit it. Example C, four atoms, your earlier case. H is east of R; Y is north of X; R is south of Y; Z is west of X. A consistent set: X equals Fact, Y equals Theory, R equals Example, H equals Case study, Z equals Fiction. Practice until this becomes fluid and fast.'
+                speech: 'Guided Examples. Explore the library of thirty worked analogies. Use the filter buttons to focus on single atoms, dual heads, chains, or full quartets. Each entry shows the premise, anchors, compass moves, the resulting mapping, and a quick rationale. Tap Speak summary to hear one in the same training voice.'
             },
             {
                 id: 'practice',
@@ -938,6 +962,361 @@
                 speech: 'Glossary. Arc of Abstraction: the mental continuum from concrete or particular to abstract or general. Up-shift and Down-shift: moves along the arc, north and south. Analogue and Opposite: lateral moves preserving or inverting role, east and west. Anchor: your chosen seed concept for a letter. Compound mapping: a single letter carrying a composed phrase to satisfy multiple relations, for example Chaotic example. Reframe: deliberate change to an anchored concept, logged for consistency tracking.'
             }
         ];
+
+        let guidedExamplesRoot = null;
+
+        function renderGuidedExamples() {
+            const mount = document.getElementById('instContent');
+            if (!mount) return;
+
+            if (guidedExamplesRoot && mount.dataset.examplesLoaded === '1') {
+                mount.innerHTML = '';
+                mount.appendChild(guidedExamplesRoot);
+                return;
+            }
+
+            const examples = getBeginnerExamples();
+            const container = document.createElement('div');
+            container.id = 'guidedExamples';
+
+            const heading = document.createElement('h3');
+            heading.textContent = 'Guided Examples';
+            container.appendChild(heading);
+
+            const intro = document.createElement('p');
+            intro.textContent = 'Study thirty beginner-friendly mappings. Anchor each letter, follow the compass moves, and confirm the resulting mapping with the provided rationale.';
+            container.appendChild(intro);
+
+            const filters = document.createElement('div');
+            filters.id = 'examplesFilters';
+            filters.innerHTML = `
+                <strong>Filter:</strong>
+                <button data-f="all" class="active">All</button>
+                <button data-f="single">Single-atom</button>
+                <button data-f="double-same-head">Two-atom (same head)</button>
+                <button data-f="double-dual-head">Two-atom (dual heads)</button>
+                <button data-f="triple-chain">Three-atom chains</button>
+                <button data-f="quad">Four-atom sets</button>
+            `;
+            container.appendChild(filters);
+
+            const list = document.createElement('ol');
+            list.id = 'examplesList';
+            container.appendChild(list);
+
+            function renderList(filter = 'all') {
+                list.innerHTML = '';
+                examples
+                    .filter(ex => filter === 'all' ? true : ex.level === filter)
+                    .forEach(ex => {
+                        const li = document.createElement('li');
+                        li.className = `ex ex-${ex.level}`;
+                        li.innerHTML = `
+                            <h4>Ex ${ex.id}. ${ex.theme}</h4>
+                            <p><strong>Premise:</strong> ${ex.premise}</p>
+                            <p><strong>Anchors:</strong> ${ex.anchors.map(([L, c]) => `${L} := “${c}”`).join('; ')}</p>
+                            <p><strong>Transforms:</strong> ${ex.transforms.join(' • ')}</p>
+                            <p><strong>Resulting mapping:</strong> ${ex.mapping.map(([L, c]) => `${L} → “${c}”`).join('; ')}</p>
+                            <p><em>Why it works:</em> ${ex.rationale}</p>
+                            <div class="exActions">
+                                <button data-speak="${ex.id}">Speak summary</button>
+                                <button data-copy="${ex.id}">Copy to clipboard</button>
+                            </div>
+                        `;
+                        list.appendChild(li);
+                    });
+            }
+
+            renderList('all');
+
+            container.addEventListener('click', (event) => {
+                const button = event.target.closest('button');
+                if (!button) return;
+                const filter = button.dataset.f;
+                if (filter) {
+                    container.querySelectorAll('#examplesFilters button').forEach(btn => btn.classList.remove('active'));
+                    button.classList.add('active');
+                    renderList(filter);
+                    return;
+                }
+                if (button.dataset.speak) {
+                    const id = parseInt(button.dataset.speak, 10);
+                    const example = examples.find(x => x.id === id);
+                    if (example) {
+                        speakOnce(summarizeExample(example));
+                    }
+                }
+                if (button.dataset.copy) {
+                    const id = parseInt(button.dataset.copy, 10);
+                    const example = examples.find(x => x.id === id);
+                    if (example) {
+                        const summary = summarizeExample(example);
+                        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                            navigator.clipboard.writeText(summary).catch(() => {
+                                window.prompt('Copy this example summary:', summary);
+                            });
+                        } else {
+                            window.prompt('Copy this example summary:', summary);
+                        }
+                    }
+                }
+            });
+
+            function summarizeExample(ex) {
+                const line1 = `Premise: ${ex.premise}`;
+                const line2 = `Anchors: ${ex.anchors.map(([L, c]) => `${L} equals ${c}`).join('; ')}.`;
+                const line3 = `Mapping: ${ex.mapping.map(([L, c]) => `${L} to ${c}`).join('; ')}.`;
+                return `${line1} ${line2} ${line3}`;
+            }
+
+            mount.innerHTML = '';
+            mount.appendChild(container);
+            mount.dataset.examplesLoaded = '1';
+            guidedExamplesRoot = container;
+        }
+
+        function getBeginnerExamples() {
+            return [
+                // --- Single-atom (10) ---
+                { id:1, level:"single", theme:"Learning — Up-shift",
+                  premise:"N is north of J.",
+                  anchors:[["J","Fact"]],
+                  transforms:["North(J→N): up-shift Fact → Theory"],
+                  mapping:[["J","Fact"],["N","Theory"]],
+                  rationale:"North is higher abstraction; Theory stands above Fact."
+                },
+                { id:2, level:"single", theme:"Biology — Down-shift",
+                  premise:"B is south of A.",
+                  anchors:[["A","Animal"]],
+                  transforms:["South(A→B): down-shift Animal → Dog"],
+                  mapping:[["A","Animal"],["B","Dog"]],
+                  rationale:"South is more specific; Dog is an instance of Animal."
+                },
+                { id:3, level:"single", theme:"Illumination — Analogue",
+                  premise:"C is east of D.",
+                  anchors:[["D","Candle"]],
+                  transforms:["East(D→C): analogue of Candle → Lantern"],
+                  mapping:[["D","Candle"],["C","Lantern"]],
+                  rationale:"East is same-role/sibling; Lantern parallels Candle."
+                },
+                { id:4, level:"single", theme:"Order/Chaos — Opposite",
+                  premise:"E is west of F.",
+                  anchors:[["F","Order"]],
+                  transforms:["West(F→E): opposite of Order → Chaos"],
+                  mapping:[["F","Order"],["E","Chaos"]],
+                  rationale:"West is counterpart; Chaos opposes Order."
+                },
+                { id:5, level:"single", theme:"Technology — Up-shift",
+                  premise:"G is north of H.",
+                  anchors:[["H","Program"]],
+                  transforms:["North(H→G): Program → Platform"],
+                  mapping:[["H","Program"],["G","Platform"]],
+                  rationale:"Platform generalizes programs; higher on the Arc."
+                },
+                { id:6, level:"single", theme:"Music — Down-shift",
+                  premise:"I is south of K.",
+                  anchors:[["K","Song"]],
+                  transforms:["South(K→I): Song → Verse"],
+                  mapping:[["K","Song"],["I","Verse"]],
+                  rationale:"Verse is a component of a Song."
+                },
+                { id:7, level:"single", theme:"Navigation — Analogue",
+                  premise:"L is east of M.",
+                  anchors:[["M","Map"]],
+                  transforms:["East(M→L): Map → Chart"],
+                  mapping:[["M","Map"],["L","Chart"]],
+                  rationale:"Chart is a sibling format to Map."
+                },
+                { id:8, level:"single", theme:"Emotion — Opposite",
+                  premise:"P is west of O.",
+                  anchors:[["O","Calm"]],
+                  transforms:["West(O→P): Calm → Agitation"],
+                  mapping:[["O","Calm"],["P","Agitation"]],
+                  rationale:"Agitation is the counter-state of Calm."
+                },
+                { id:9, level:"single", theme:"Finance — Up-shift",
+                  premise:"Q is north of R.",
+                  anchors:[["R","Expense"]],
+                  transforms:["North(R→Q): Expense → Budget"],
+                  mapping:[["R","Expense"],["Q","Budget"]],
+                  rationale:"Budget organizes expenses; higher level."
+                },
+                { id:10, level:"single", theme:"Astronomy — Down-shift",
+                  premise:"T is south of S.",
+                  anchors:[["S","Galaxy"]],
+                  transforms:["South(S→T): Galaxy → Star"],
+                  mapping:[["S","Galaxy"],["T","Star"]],
+                  rationale:"A Star is a constituent of a Galaxy."
+                },
+
+                // --- Two-atom: same head (8) ---
+                { id:11, level:"double-same-head", theme:"Theory & Order — Compound",
+                  premise:"Z is south of J; Z is west of P.",
+                  anchors:[["J","Theory"],["P","Order"]],
+                  transforms:["South(J→Z): Theory → Example","West(P→Z): Order → Chaos (compound: Chaotic example)"],
+                  mapping:[["J","Theory"],["P","Order"],["Z","Chaotic example"]],
+                  rationale:"Z must satisfy both; a ‘Chaotic example’ fits down-shift and opposition."
+                },
+                { id:12, level:"double-same-head", theme:"Writing — Paragraph role",
+                  premise:"A is north of B; A is east of C.",
+                  anchors:[["B","Sentence"],["C","Section"]],
+                  transforms:["North(B→A): Sentence → Paragraph","East(C→A): Section → Paragraph (sibling)"],
+                  mapping:[["B","Sentence"],["C","Section"],["A","Paragraph"]],
+                  rationale:"Paragraph stands above a Sentence and parallels a Section in function."
+                },
+                { id:13, level:"double-same-head", theme:"Physics — Heat vs Cold",
+                  premise:"D is south of C; D is west of E.",
+                  anchors:[["C","Energy"],["E","Cold"]],
+                  transforms:["South(C→D): Energy → Heat","West(E→D): Cold → Heat"],
+                  mapping:[["C","Energy"],["E","Cold"],["D","Heat"]],
+                  rationale:"Heat is a specific form of Energy and the counter to Cold."
+                },
+                { id:14, level:"double-same-head", theme:"Light — Coherent mapping",
+                  premise:"H is east of I; H is north of J.",
+                  anchors:[["I","Lamp"],["J","Flame"]],
+                  transforms:["East(I→H): Lamp → Lantern","North(J→H): Flame → Lantern (higher containment)"],
+                  mapping:[["I","Lamp"],["J","Flame"],["H","Lantern"]],
+                  rationale:"Lantern is a sibling of Lamp, and stands above Flame as container/assembly."
+                },
+                { id:15, level:"double-same-head", theme:"Ethics — Lying as behavior",
+                  premise:"K is west of L; K is south of M.",
+                  anchors:[["L","Truth"],["M","Behavior"]],
+                  transforms:["West(L→K): Truth → Lie","South(M→K): Behavior → Lie"],
+                  mapping:[["L","Truth"],["M","Behavior"],["K","Lie"]],
+                  rationale:"A Lie opposes Truth and is a specific Behavior."
+                },
+                { id:16, level:"double-same-head", theme:"Literature — Forms",
+                  premise:"N is east of O; N is south of P.",
+                  anchors:[["O","Novel"],["P","Literature"]],
+                  transforms:["East(O→N): Novel → Short story","South(P→N): Literature → Short story"],
+                  mapping:[["O","Novel"],["P","Literature"],["N","Short story"]],
+                  rationale:"Short story is a sibling to Novel and a specific of Literature."
+                },
+                { id:17, level:"double-same-head", theme:"Civics — Regulation vs Anarchy",
+                  premise:"Q is north of R; Q is west of S.",
+                  anchors:[["R","Procedure"],["S","Anarchy"]],
+                  transforms:["North(R→Q): Procedure → Policy","West(S→Q): Anarchy → Policy"],
+                  mapping:[["R","Procedure"],["S","Anarchy"],["Q","Policy"]],
+                  rationale:"Policy sits above Procedure and opposes Anarchy’s absence of rules."
+                },
+                { id:18, level:"double-same-head", theme:"Roles — Medicine",
+                  premise:"T is east of U; T is west of V.",
+                  anchors:[["U","Doctor"],["V","Patient"]],
+                  transforms:["East(U→T): Doctor → Physician","West(V→T): Patient → Physician (counter-role)"],
+                  mapping:[["U","Doctor"],["V","Patient"],["T","Physician"]],
+                  rationale:"Physician is a synonym/analogue of Doctor and the counter-role to Patient."
+                },
+
+                // --- Two-atom: dual heads (6) ---
+                { id:19, level:"double-dual-head", theme:"Data & Tools",
+                  premise:"W is north of X; Y is east of Z.",
+                  anchors:[["X","Data"],["Z","Hammer"]],
+                  transforms:["North(X→W): Data → Information","East(Z→Y): Hammer → Tool"],
+                  mapping:[["X","Data"],["W","Information"],["Z","Hammer"],["Y","Tool"]],
+                  rationale:"Information abstracts Data; Tool parallels Hammer."
+                },
+                { id:20, level:"double-dual-head", theme:"Order & Nature",
+                  premise:"A is west of B; C is south of D.",
+                  anchors:[["B","Order"],["D","Tree"]],
+                  transforms:["West(B→A): Order → Chaos","South(D→C): Tree → Branch"],
+                  mapping:[["B","Order"],["A","Chaos"],["D","Tree"],["C","Branch"]],
+                  rationale:"Chaos opposes Order; Branch is part of Tree."
+                },
+                { id:21, level:"double-dual-head", theme:"Transport & Cities",
+                  premise:"E is east of F; G is north of H.",
+                  anchors:[["F","Ship"],["H","Town"]],
+                  transforms:["East(F→E): Ship → Boat (sibling craft)","North(H→G): Town → City"],
+                  mapping:[["F","Ship"],["E","Boat"],["H","Town"],["G","City"]],
+                  rationale:"Boat parallels Ship; City stands above Town."
+                },
+                { id:22, level:"double-dual-head", theme:"Light & Art",
+                  premise:"I is west of J; K is east of L.",
+                  anchors:[["J","Light"],["L","Poem"]],
+                  transforms:["West(J→I): Light → Darkness","East(L→K): Poem → Song (sibling artform)"],
+                  mapping:[["J","Light"],["I","Darkness"],["L","Poem"],["K","Song"]],
+                  rationale:"Darkness is the counter-state to Light; Song parallels Poem."
+                },
+                { id:23, level:"double-dual-head", theme:"Systems & Life",
+                  premise:"M is south of N; O is west of P.",
+                  anchors:[["N","System"],["P","Life"]],
+                  transforms:["South(N→M): System → Module","West(P→O): Life → Death"],
+                  mapping:[["N","System"],["M","Module"],["P","Life"],["O","Death"]],
+                  rationale:"Module is a part of a System; Death opposes Life."
+                },
+                { id:24, level:"double-dual-head", theme:"Food & Geography",
+                  premise:"Q is east of R; S is south of T.",
+                  anchors:[["R","Breakfast"],["T","Continent"]],
+                  transforms:["East(R→Q): Breakfast → Brunch (analogue)","South(T→S): Continent → Country"],
+                  mapping:[["R","Breakfast"],["Q","Brunch"],["T","Continent"],["S","Country"]],
+                  rationale:"Brunch parallels Breakfast; Country is within a Continent."
+                },
+
+                // --- Three-atom chains (4) ---
+                { id:25, level:"triple-chain", theme:"Logic — Counterexample path",
+                  premise:"A is south of B; C is east of A; D is west of C.",
+                  anchors:[["B","Theory"]],
+                  transforms:["South(B→A): Theory → Example","East(A→C): Example → Case study","West(C→D): Case study → Counterexample"],
+                  mapping:[["B","Theory"],["A","Example"],["C","Case study"],["D","Counterexample"]],
+                  rationale:"A down; C lateral sibling; D as foil to C—consistent chain."
+                },
+                { id:26, level:"triple-chain", theme:"Projects — Work breakdown",
+                  premise:"E is north of F; G is south of E; H is east of G.",
+                  anchors:[["F","Task"]],
+                  transforms:["North(F→E): Task → Project","South(E→G): Project → Subtask","East(G→H): Subtask → Work item"],
+                  mapping:[["F","Task"],["E","Project"],["G","Subtask"],["H","Work item"]],
+                  rationale:"Up then down then sideways within the same work hierarchy."
+                },
+                { id:27, level:"triple-chain", theme:"Deception — Roles",
+                  premise:"I is west of J; K is north of I; L is east of K.",
+                  anchors:[["J","Truth"]],
+                  transforms:["West(J→I): Truth → Lie","North(I→K): Lie → Deception strategy","East(K→L): Deception strategy → Ruse"],
+                  mapping:[["J","Truth"],["I","Lie"],["K","Deception strategy"],["L","Ruse"]],
+                  rationale:"Counter-role, then abstraction, then sibling tactic."
+                },
+                { id:28, level:"triple-chain", theme:"Design — Deliverables",
+                  premise:"M is east of N; O is north of M; P is south of O.",
+                  anchors:[["N","Sketch"]],
+                  transforms:["East(N→M): Sketch → Outline","North(M→O): Outline → Design","South(O→P): Design → Wireframe"],
+                  mapping:[["N","Sketch"],["M","Outline"],["O","Design"],["P","Wireframe"]],
+                  rationale:"Analogue within drafting, then up to Design, then down to a specific artifact."
+                },
+
+                // --- Four-atom (2) ---
+                { id:29, level:"quad", theme:"Learning — Full weave",
+                  premise:"H is east of R; Y is north of X; R is south of Y; Z is west of X.",
+                  anchors:[["X","Fact"]],
+                  transforms:[
+                    "North(X→Y): Fact → Theory",
+                    "South(Y→R): Theory → Example",
+                    "East(R→H): Example → Case study",
+                    "West(X→Z): Fact → Fiction"
+                  ],
+                  mapping:[["X","Fact"],["Y","Theory"],["R","Example"],["H","Case study"],["Z","Fiction"]],
+                  rationale:"Classic quartet: up from Fact, down to Example, lateral to Case study, counter to Fiction."
+                },
+                { id:30, level:"quad", theme:"Education — Pedagogy weave",
+                  premise:"A is west of D; B is north of A; C is east of B; D is south of C.",
+                  anchors:[["A","Play"],["B","Pedagogy"],["C","Andragogy"]],
+                  transforms:[
+                    "Given A=Play; West requires D to be its structured counterpart → Lesson",
+                    "North(A→B): Play → Pedagogy (framework above)",
+                    "East(B→C): Pedagogy → Andragogy (sibling adult-learning)",
+                    "South(C→D): Andragogy → Lesson (specific instructional unit)"
+                  ],
+                  mapping:[["A","Play"],["B","Pedagogy"],["C","Andragogy"],["D","Lesson"]],
+                  rationale:"Play vs Lesson as counter-styles; Pedagogy above Play; Andragogy as sibling to Pedagogy; Lesson as a concrete unit under Andragogy."
+                }
+            ];
+        }
+
+        async function speakOnce(text) {
+            if (!text) return;
+            if (!engine || !engine.voice) return;
+            if (typeof engine.voice.cancelAndWait === 'function') {
+                await engine.voice.cancelAndWait();
+            }
+            engine.voice.speak(text, engine.sessionToken);
+        }
 
         const SANDBOX_TRANSFORMS = {
             N: {
@@ -3840,6 +4219,9 @@
                     button.setAttribute('tabindex', isActive ? '0' : '-1');
                 });
                 this.content.innerHTML = section.html;
+                if (section.id === 'examples') {
+                    renderGuidedExamples();
+                }
                 this.content.scrollTop = 0;
                 localStorage.setItem('instSection', section.id);
                 this.markVisited(section.id);
