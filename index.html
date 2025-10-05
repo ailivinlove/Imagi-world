@@ -82,6 +82,12 @@
             font-size: 0.85rem;
         }
 
+        #listenOnlyHint {
+            display: block;
+            margin-top: 0.25rem;
+            opacity: 0.8;
+        }
+
         input[type="range"] {
             width: 100%;
             height: 8px;
@@ -728,6 +734,13 @@
                 <input id="numTrialsInput" type="number" min="1" max="10000" step="1" value="20" />
                 <input id="numTrialsSlider" type="range" min="1" max="500" step="1" value="20" />
                 <span id="numTrialsDisplay">Trials: 20</span>
+                <label class="inline" title="Let the session play without responses">
+                    <input id="listenOnlyToggle" type="checkbox" />
+                    Listen-Only (Auto-Advance)
+                </label>
+                <small id="listenOnlyHint" aria-live="polite" hidden>
+                    Listening mode: scoring disabled; session will auto-advance to completion.
+                </small>
             </div>
 
             <div class="control-group checkbox-group">
@@ -871,6 +884,7 @@
         };
 
         const NUM_TRIALS_KEY = 'numTrials';
+        const LISTEN_ONLY_KEY = 'listenOnly';
         const numTrialsInput = document.getElementById('numTrialsInput');
         const numTrialsSlider = document.getElementById('numTrialsSlider');
         const numTrialsDisplay = document.getElementById('numTrialsDisplay');
@@ -1547,6 +1561,24 @@
             }
         };
 
+        function loadListenOnly() {
+            try {
+                return localStorage.getItem(LISTEN_ONLY_KEY) === '1';
+            } catch {
+                return false;
+            }
+        }
+
+        function persistListenOnly(on) {
+            try {
+                localStorage.setItem(LISTEN_ONLY_KEY, on ? '1' : '0');
+            } catch {}
+            const hint = document.getElementById('listenOnlyHint');
+            if (hint) {
+                hint.hidden = !on;
+            }
+        }
+
         function loadNumTrials() {
             const v = parseInt(localStorage.getItem(NUM_TRIALS_KEY) || '20', 10);
             const clamped = Math.min(10000, Math.max(1, isNaN(v) ? 20 : v));
@@ -1576,6 +1608,7 @@
         });
 
         const initialNumTrials = loadNumTrials();
+        persistListenOnly(loadListenOnly());
 
         function sessionDefaults() {
             return {
@@ -1585,7 +1618,10 @@
                 seedSession: null,
                 n: parseInt(document.getElementById('n-slider').value, 10),
                 k: parseInt(document.getElementById('k-slider').value, 10),
-                secondsPerTrial: parseFloat(document.getElementById('spt-slider').value)
+                secondsPerTrial: parseFloat(document.getElementById('spt-slider').value),
+                flags: {
+                    listenOnly: loadListenOnly()
+                }
             };
         }
 
@@ -3650,6 +3686,10 @@
                 this.responseResolver = null;
                 this.responseTimer = null;
                 this.pendingTrialHandle = null;
+                this.passiveTimer = null;
+                this.passiveAdvanceComplete = null;
+                this.passiveAdvanceResolver = null;
+                this.currentTrialContext = null;
                 this.responseStartTime = 0;
                 this.currentPremises = [];
                 this.score = 0;
@@ -3712,6 +3752,95 @@
                     clearTimeout(this.pendingTrialHandle);
                     this.pendingTrialHandle = null;
                 }
+                if (this.passiveTimer) {
+                    clearTimeout(this.passiveTimer);
+                    this.passiveTimer = null;
+                }
+            }
+
+            setupPassiveAdvance(context, complete) {
+                this.currentTrialContext = context;
+                this.passiveAdvanceComplete = complete;
+                if (this.passiveTimer) {
+                    clearTimeout(this.passiveTimer);
+                    this.passiveTimer = null;
+                }
+                const delay = Math.max(0, Math.round(this.secondsPerTrial * 1000));
+                this.passiveTimer = setTimeout(() => {
+                    this.passiveTimer = null;
+                    const done = this.passiveAdvanceComplete;
+                    this.passiveAdvanceComplete = null;
+                    if (done) {
+                        done();
+                    }
+                }, delay);
+                const repeatBtn = document.getElementById('repeat-btn');
+                if (repeatBtn) {
+                    repeatBtn.disabled = false;
+                }
+            }
+
+            finalizeTrial(context, outcome) {
+                if (context.actualMatch && context.certificate) {
+                    this.state.applyCooldown(Array.from(context.premise.getLetters()), context.currentIndex, this.n);
+                }
+
+                const featureLog = {
+                    lettersSet: Array.from(context.featureSnapshot.lettersSet).sort(),
+                    degreeVector: {},
+                    skeletonIsoSignature: context.featureSnapshot.skeletonIsoSignature,
+                    atomAxisProfile: {}
+                };
+                context.featureSnapshot.degreeVector.forEach((vec, letter) => {
+                    featureLog.degreeVector[letter] = [...vec];
+                });
+                context.featureSnapshot.atomAxisProfile.forEach((count, axis) => {
+                    featureLog.atomAxisProfile[axis] = count;
+                });
+
+                const logEntry = {
+                    seedSession: this.seedManager.sessionSeed,
+                    trialIndex: context.currentIndex,
+                    trialNumber: context.currentIndex + 1,
+                    numTrials: this.session.numTrials,
+                    n: this.n,
+                    k: this.k,
+                    letters: Array.from(context.premise.getLetters()).join(''),
+                    atomsCanonical: context.premise.toKey(),
+                    atomsMirrorCanonical: context.premise.mirrorKey(),
+                    isoSignature: context.premise.isoSignature(),
+                    plannedMatch: context.planMatch,
+                    planType: context.planType,
+                    foilType: context.foilType || null,
+                    certificate: context.certificate || null,
+                    satStatus: context.satOk,
+                    midWindowDerivable: context.certificate ? context.certificate.midWindowDerivable : false,
+                    noveltyScores: context.noveltyScores,
+                    response: {
+                        choice: outcome.choice,
+                        correct: outcome.correct,
+                        rtMs: outcome.rtMs,
+                        omission: outcome.omission
+                    },
+                    cooldownLetters: Array.from(this.state.getActiveCooldown(context.currentIndex + 1)),
+                    plannerFlip: context.plannerFlip,
+                    modeUsed: context.modeUsed,
+                    features: featureLog,
+                    modeListenOnly: outcome.listenOnly,
+                    inputExpected: !outcome.listenOnly,
+                    passiveAdvance: outcome.passiveAdvance,
+                    groundTruthMatch: context.actualMatch
+                };
+
+                this.logger.add(logEntry);
+                this.updateDebugPanel(logEntry);
+                const repeatBtn = document.getElementById('repeat-btn');
+                if (repeatBtn) {
+                    repeatBtn.disabled = true;
+                }
+                this.passiveAdvanceComplete = null;
+                this.passiveAdvanceResolver = null;
+                this.currentTrialContext = null;
             }
 
             speakOnce(text) {
@@ -3769,6 +3898,13 @@
                 this.session.state = 'STOPPED';
                 this.sessionToken += 1;
                 this.clearAllTimers();
+                if (this.passiveAdvanceResolver) {
+                    const resolver = this.passiveAdvanceResolver;
+                    this.passiveAdvanceResolver = null;
+                    resolver();
+                }
+                this.passiveAdvanceComplete = null;
+                this.currentTrialContext = null;
                 await this.voice.cancelAndWait();
                 this.awaitingResponse = false;
                 if (this.responseResolver) {
@@ -3934,7 +4070,16 @@
 
             startSession() {
                 if (this.session.state === 'RUNNING') return;
+                this.clearAllTimers();
+                this.passiveAdvanceComplete = null;
+                this.passiveAdvanceResolver = null;
+                this.currentTrialContext = null;
                 this.session = sessionDefaults();
+                if (!this.session.flags) {
+                    this.session.flags = { listenOnly: loadListenOnly() };
+                } else {
+                    this.session.flags.listenOnly = loadListenOnly();
+                }
                 const totalPlanned = this.applyNumTrialsFromUI();
                 this.session.trialIndex = 0;
                 this.score = 0;
@@ -4032,6 +4177,55 @@
                 await this.voice.speakPremise(premise, sessionToken);
                 if (sessionToken !== this.sessionToken) return;
 
+                const actualMatch = Boolean(planMatch && certificate);
+                const context = {
+                    sessionToken,
+                    currentIndex,
+                    planMatch,
+                    planType,
+                    foilType,
+                    certificate,
+                    satOk: satResult.ok,
+                    noveltyScores: novelty.noveltyScores,
+                    featureSnapshot,
+                    modeUsed,
+                    actualMatch,
+                    premise,
+                    plannerFlip: plannerFlip || this.planner.wasFlipped(currentIndex)
+                };
+
+                const listenOnly = Boolean(this.session.flags && this.session.flags.listenOnly);
+                const feedbackEl = document.getElementById('feedback');
+
+                if (listenOnly) {
+                    document.getElementById('match-btn').disabled = true;
+                    document.getElementById('no-match-btn').disabled = true;
+                    if (feedbackEl) {
+                        feedbackEl.textContent = 'Listening mode active. Auto-advancing...';
+                        feedbackEl.className = 'feedback';
+                    }
+                    await new Promise(resolve => {
+                        this.passiveAdvanceResolver = resolve;
+                        const complete = () => {
+                            this.passiveAdvanceResolver = null;
+                            if (this.session.state === 'RUNNING' && sessionToken === this.sessionToken) {
+                                this.finalizeTrial(context, {
+                                    choice: null,
+                                    correct: null,
+                                    omission: null,
+                                    rtMs: null,
+                                    passiveAdvance: true,
+                                    listenOnly: true
+                                });
+                            }
+                            resolve();
+                        };
+                        this.setupPassiveAdvance(context, complete);
+                    });
+                    if (sessionToken !== this.sessionToken) return;
+                    return;
+                }
+
                 this.awaitingResponse = true;
                 this.responseStartTime = Date.now();
 
@@ -4059,7 +4253,6 @@
                 document.getElementById('no-match-btn').disabled = true;
                 document.getElementById('repeat-btn').disabled = true;
 
-                const actualMatch = Boolean(planMatch && certificate);
                 let correct = false;
                 let omission = false;
 
@@ -4080,62 +4273,27 @@
                 }
 
                 const rt = response === null ? null : Date.now() - this.responseStartTime;
-                const feedbackEl = document.getElementById('feedback');
-                if (omission) {
-                    feedbackEl.textContent = 'Response window expired.';
-                    feedbackEl.className = 'feedback incorrect';
-                } else if (correct) {
-                    feedbackEl.textContent = 'Correct';
-                    feedbackEl.className = 'feedback correct';
-                } else {
-                    feedbackEl.textContent = 'Incorrect';
-                    feedbackEl.className = 'feedback incorrect';
+                if (feedbackEl) {
+                    if (omission) {
+                        feedbackEl.textContent = 'Response window expired.';
+                        feedbackEl.className = 'feedback incorrect';
+                    } else if (correct) {
+                        feedbackEl.textContent = 'Correct';
+                        feedbackEl.className = 'feedback correct';
+                    } else {
+                        feedbackEl.textContent = 'Incorrect';
+                        feedbackEl.className = 'feedback incorrect';
+                    }
                 }
 
-                if (actualMatch && certificate) {
-                    this.state.applyCooldown(Array.from(premise.getLetters()), currentIndex, this.n);
-                }
-
-                const featureLog = {
-                    lettersSet: Array.from(featureSnapshot.lettersSet).sort(),
-                    degreeVector: {},
-                    skeletonIsoSignature: featureSnapshot.skeletonIsoSignature,
-                    atomAxisProfile: {}
-                };
-                featureSnapshot.degreeVector.forEach((vec, letter) => {
-                    featureLog.degreeVector[letter] = [...vec];
+                this.finalizeTrial(context, {
+                    choice: response,
+                    correct,
+                    omission,
+                    rtMs: rt,
+                    passiveAdvance: false,
+                    listenOnly: false
                 });
-                featureSnapshot.atomAxisProfile.forEach((count, axis) => {
-                    featureLog.atomAxisProfile[axis] = count;
-                });
-
-                const logEntry = {
-                    seedSession: this.seedManager.sessionSeed,
-                    trialIndex: currentIndex,
-                    trialNumber: currentIndex + 1,
-                    numTrials: this.session.numTrials,
-                    n: this.n,
-                    k: this.k,
-                    letters: Array.from(premise.getLetters()).join(''),
-                    atomsCanonical: premise.toKey(),
-                    atomsMirrorCanonical: premise.mirrorKey(),
-                    isoSignature: premise.isoSignature(),
-                    plannedMatch: planMatch,
-                    planType,
-                    foilType: foilType || null,
-                    certificate: certificate || null,
-                    satStatus: satResult.ok,
-                    midWindowDerivable: certificate ? certificate.midWindowDerivable : false,
-                    noveltyScores: novelty.noveltyScores,
-                    response: { choice: response, correct, rtMs: rt, omission },
-                    cooldownLetters: Array.from(this.state.getActiveCooldown(currentIndex + 1)),
-                    plannerFlip: plannerFlip || this.planner.wasFlipped(currentIndex),
-                    modeUsed,
-                    features: featureLog
-                };
-
-                this.logger.add(logEntry);
-                this.updateDebugPanel(logEntry);
             }
 
             updateDebugPanel(entry) {
@@ -4160,6 +4318,22 @@
             }
 
             async handleRepeat() {
+                const listenOnlyFlag = Boolean(this.session.flags && this.session.flags.listenOnly);
+                const passiveActive = Boolean(this.currentTrialContext && this.passiveAdvanceComplete);
+                if (listenOnlyFlag || passiveActive) {
+                    if (!this.currentTrialContext || this.session.state !== 'RUNNING') return;
+                    if (this.currentTrialContext.sessionToken !== this.sessionToken) return;
+                    await this.voice.cancelAndWait();
+                    await this.voice.speakPremise(this.currentTrialContext.premise, this.sessionToken);
+                    if (this.session.state !== 'RUNNING') return;
+                    const stillPassive = Boolean(this.session.flags && this.session.flags.listenOnly) || passiveActive;
+                    if (!stillPassive || !this.currentTrialContext || this.currentTrialContext.sessionToken !== this.sessionToken) return;
+                    const complete = this.passiveAdvanceComplete;
+                    if (complete) {
+                        this.setupPassiveAdvance(this.currentTrialContext, complete);
+                    }
+                    return;
+                }
                 if (!this.awaitingResponse) return;
                 if (this.responseTimer) {
                     clearTimeout(this.responseTimer);
@@ -4844,6 +5018,21 @@
         }
 
         const engine = new GameEngine();
+        const listenOnlyToggle = document.getElementById('listenOnlyToggle');
+        if (listenOnlyToggle) {
+            const init = loadListenOnly();
+            listenOnlyToggle.checked = init;
+            persistListenOnly(init);
+            listenOnlyToggle.addEventListener('change', () => {
+                const on = listenOnlyToggle.checked;
+                persistListenOnly(on);
+                if (!engine.session.flags) {
+                    engine.session.flags = {};
+                }
+                // Change applies from the NEXT trial boundary; current trial runs to completion.
+                engine.session.flags.listenOnly = on;
+            });
+        }
         const instructions = new InstructionsManager(engine);
         instructions.initialize();
         engine.initialize().then(() => {
