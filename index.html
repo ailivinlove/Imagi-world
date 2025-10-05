@@ -56,6 +56,18 @@
             font-size: 0.95rem;
         }
 
+        #numTrialsSlider {
+            width: 100%;
+            margin-top: 8px;
+        }
+
+        #numTrialsDisplay {
+            display: block;
+            margin-top: 8px;
+            font-weight: 600;
+            color: #e94560;
+        }
+
         .label {
             display: block;
             margin-bottom: 8px;
@@ -419,9 +431,10 @@
             </div>
 
             <div class="control-group">
-                <label for="numTrials" class="label">Number of trials (1–10000)</label>
-                <input id="numTrials" type="number" min="1" max="10000" step="1" value="20" />
-                <small id="numTrialsHelp" class="hint">Applied on Start/Restart. Stored locally.</small>
+                <label for="numTrialsInput">Number of trials per session</label>
+                <input id="numTrialsInput" type="number" min="1" max="10000" step="1" value="20" />
+                <input id="numTrialsSlider" type="range" min="1" max="500" step="1" value="20" />
+                <span id="numTrialsDisplay">Trials: 20</span>
             </div>
 
             <div class="control-group checkbox-group">
@@ -454,7 +467,7 @@
                 </div>
                 <div class="button-group">
                     <button id="test-btn" class="secondary">Run Tests</button>
-                    <button id="export-btn" class="secondary">Export Data</button>
+                    <button id="export-btn" class="secondary">Download so far</button>
                 </div>
             </div>
 
@@ -520,25 +533,65 @@
         const HAMMING_WINDOW = 8;
         const NOVELTY_OVERRIDE_THRESHOLD = 30;
         const MAX_GENERATION_ATTEMPTS = 240;
+        const conflictConfig = {
+            foilRate: 0.35,
+            foilTypesWeights: {
+                ANCHOR_ONE: 0.20,
+                PAIR_SWAP: 0.20,
+                PARITY_OFF: 0.15,
+                AXIS_ORTHO: 0.15,
+                DERIVED_IN_ONE: 0.15,
+                WINDOW_SHADOW: 0.15
+            }
+        };
 
-        const NUM_TRIALS_KEY = "numTrials";
-        const numTrialsInput = document.getElementById("numTrials");
-        numTrialsInput.value = localStorage.getItem(NUM_TRIALS_KEY) ?? "20";
-        numTrialsInput.addEventListener("change", () => {
-            const v = Math.max(1, Math.min(10000, parseInt(numTrialsInput.value || "20", 10)));
-            numTrialsInput.value = String(v);
-            localStorage.setItem(NUM_TRIALS_KEY, String(v));
+        const NUM_TRIALS_KEY = 'numTrials';
+        const numTrialsInput = document.getElementById('numTrialsInput');
+        const numTrialsSlider = document.getElementById('numTrialsSlider');
+        const numTrialsDisplay = document.getElementById('numTrialsDisplay');
+
+        function loadNumTrials() {
+            const v = parseInt(localStorage.getItem(NUM_TRIALS_KEY) || '20', 10);
+            const clamped = Math.min(10000, Math.max(1, isNaN(v) ? 20 : v));
+            numTrialsInput.value = String(clamped);
+            numTrialsSlider.value = String(Math.min(500, clamped));
+            numTrialsDisplay.textContent = `Trials: ${clamped}`;
+            return clamped;
+        }
+
+        function persistNumTrials(v) {
+            const clamped = Math.min(10000, Math.max(1, v | 0));
+            localStorage.setItem(NUM_TRIALS_KEY, String(clamped));
+            numTrialsDisplay.textContent = `Trials: ${clamped}`;
+            if (clamped <= 500) numTrialsSlider.value = String(clamped);
+            numTrialsInput.value = String(clamped);
+            return clamped;
+        }
+
+        numTrialsInput.addEventListener('change', () => {
+            const value = parseInt(numTrialsInput.value, 10);
+            persistNumTrials(isNaN(value) ? 20 : value);
         });
 
-        const session = {
-            state: "STOPPED",
-            trialIndex: 0,
-            numTrials: Math.max(1, Math.min(10000, parseInt(numTrialsInput.value || "20", 10))),
-            seedSession: null,
-            n: parseInt(document.getElementById('n-slider').value, 10),
-            k: parseInt(document.getElementById('k-slider').value, 10),
-            secondsPerTrial: parseFloat(document.getElementById('spt-slider').value)
-        };
+        numTrialsSlider.addEventListener('input', () => {
+            const value = parseInt(numTrialsSlider.value, 10);
+            persistNumTrials(isNaN(value) ? 20 : value);
+        });
+
+        const initialNumTrials = loadNumTrials();
+
+        function sessionDefaults() {
+            return {
+                state: "STOPPED",
+                trialIndex: 0,
+                numTrials: initialNumTrials,
+                seedSession: null,
+                n: parseInt(document.getElementById('n-slider').value, 10),
+                k: parseInt(document.getElementById('k-slider').value, 10),
+                secondsPerTrial: parseFloat(document.getElementById('spt-slider').value)
+            };
+        }
+
 
         function cryptoRandom32() {
             if (window.crypto && window.crypto.getRandomValues) {
@@ -1212,38 +1265,16 @@
                 this.transitivityEnabled = enabled;
             }
 
-            computeCertificate(nBackPremise, candidatePremise, midAtoms) {
-                if (!nBackPremise) {
-                    return { match: false, reason: 'no-nback' };
-                }
+            lettersOf(premise) {
+                const letters = new Set();
+                premise.atoms.forEach(atom => {
+                    letters.add(atom.head);
+                    letters.add(atom.tail);
+                });
+                return letters;
+            }
 
-                if (nBackPremise.toKey() === candidatePremise.toKey()) {
-                    return { match: false, reason: 'identity' };
-                }
-
-                const atomsA = nBackPremise.atoms;
-                const atomsB = candidatePremise.atoms;
-                if (atomsA.length !== atomsB.length) {
-                    return { match: false, reason: 'arity-mismatch' };
-                }
-
-                const lettersA = Array.from(nBackPremise.getLetters()).sort();
-                const lettersB = Array.from(candidatePremise.getLetters()).sort();
-                if (lettersA.length !== lettersB.length) {
-                    return { match: false, reason: 'letter-cardinality' };
-                }
-
-                for (let i = 0; i < lettersA.length; i++) {
-                    if (lettersA[i] !== lettersB[i]) {
-                        return { match: false, reason: 'letter-parity' };
-                    }
-                }
-
-                const sharedLetters = lettersA.filter(letter => lettersB.includes(letter));
-                if (sharedLetters.length < 2) {
-                    return { match: false, reason: 'anchor-failure' };
-                }
-
+            computeInvertibleMapping(atomsA, atomsB) {
                 const mapping = [];
                 const used = new Set();
 
@@ -1270,67 +1301,149 @@
                     return false;
                 };
 
-                const isInvertible = search(0);
-                if (!isInvertible) {
-                    return { match: false, reason: 'no-invertible-mapping' };
+                const ok = search(0);
+                return ok ? mapping.slice() : null;
+            }
+
+            analyzeMidWindow(midAtoms) {
+                if (!midAtoms || midAtoms.length === 0) {
+                    return { ok: false };
+                }
+                const solver = new ConstraintSolver();
+                const analysis = solver.analyze(midAtoms);
+                if (!analysis.ok) {
+                    return { ok: false };
+                }
+                const reachX = buildReachability(analysis.nodesX, analysis.graphX);
+                const reachY = buildReachability(analysis.nodesY, analysis.graphY);
+                return { ok: true, analysis, reachX, reachY };
+            }
+
+            isDerivableFromMid(atom, midInfo) {
+                if (!midInfo.ok) return false;
+                const { analysis, reachX, reachY } = midInfo;
+                if (atom.axis === 'N') {
+                    const lesser = analysis.ufY.find(atom.tail);
+                    const greater = analysis.ufY.find(atom.head);
+                    const reach = reachY.get(lesser);
+                    return reach ? reach.has(greater) : false;
+                }
+                if (atom.axis === 'S') {
+                    const lesser = analysis.ufY.find(atom.head);
+                    const greater = analysis.ufY.find(atom.tail);
+                    const reach = reachY.get(lesser);
+                    return reach ? reach.has(greater) : false;
+                }
+                if (atom.axis === 'E') {
+                    const lesser = analysis.ufX.find(atom.tail);
+                    const greater = analysis.ufX.find(atom.head);
+                    const reach = reachX.get(lesser);
+                    return reach ? reach.has(greater) : false;
+                }
+                if (atom.axis === 'W') {
+                    const lesser = analysis.ufX.find(atom.head);
+                    const greater = analysis.ufX.find(atom.tail);
+                    const reach = reachX.get(lesser);
+                    return reach ? reach.has(greater) : false;
+                }
+                return false;
+            }
+
+            Equivalent(premA, premB, windowAtoms = [], midAtoms = []) {
+                const atomsA = premA.atoms;
+                const atomsB = premB.atoms;
+
+                if (atomsA.length !== atomsB.length) {
+                    return { ok: false, reason: 'parity' };
                 }
 
-                const midAnalysis = midAtoms.length > 0 ? new ConstraintSolver().analyze(midAtoms) : { ok: true, ufX: new DisjointSet(), ufY: new DisjointSet(), graphX: new Map(), graphY: new Map(), nodesX: [], nodesY: [] };
-                let midDerivable = false;
+                const mapping = this.computeInvertibleMapping(atomsA, atomsB);
+                if (!mapping) {
+                    return { ok: false, reason: 'mapping' };
+                }
 
-                if (midAnalysis.ok) {
-                    const reachX = buildReachability(midAnalysis.nodesX, midAnalysis.graphX);
-                    const reachY = buildReachability(midAnalysis.nodesY, midAnalysis.graphY);
+                const lettersA = this.lettersOf(premA);
+                const lettersB = this.lettersOf(premB);
+                const shared = new Set();
+                lettersA.forEach(letter => {
+                    if (lettersB.has(letter)) {
+                        shared.add(letter);
+                    }
+                });
+                if (shared.size < 2) {
+                    return { ok: false, reason: 'anchors' };
+                }
 
-                    const checkDerivable = (atom) => {
-                        if (atom.axis === 'N') {
-                            const lesser = midAnalysis.ufY.find(atom.tail);
-                            const greater = midAnalysis.ufY.find(atom.head);
-                            const reach = reachY.get(lesser);
-                            return reach ? reach.has(greater) : false;
-                        }
-                        if (atom.axis === 'S') {
-                            const lesser = midAnalysis.ufY.find(atom.head);
-                            const greater = midAnalysis.ufY.find(atom.tail);
-                            const reach = reachY.get(lesser);
-                            return reach ? reach.has(greater) : false;
-                        }
-                        if (atom.axis === 'E') {
-                            const lesser = midAnalysis.ufX.find(atom.tail);
-                            const greater = midAnalysis.ufX.find(atom.head);
-                            const reach = reachX.get(lesser);
-                            return reach ? reach.has(greater) : false;
-                        }
-                        if (atom.axis === 'W') {
-                            const lesser = midAnalysis.ufX.find(atom.head);
-                            const greater = midAnalysis.ufX.find(atom.tail);
-                            const reach = reachX.get(lesser);
-                            return reach ? reach.has(greater) : false;
-                        }
-                        return false;
-                    };
+                const solver = new ConstraintSolver();
+                const satResult = solver.analyze([...windowAtoms, ...atomsA, ...atomsB]);
+                if (!satResult.ok) {
+                    return { ok: false, reason: 'sat' };
+                }
 
-                    for (const atom of atomsA) {
-                        if (checkDerivable(atom) || checkDerivable(Atom.invert(atom))) {
-                            midDerivable = true;
-                            break;
+                const midInfo = this.analyzeMidWindow(midAtoms);
+                if (midInfo.ok) {
+                    for (const atom of [...atomsA, ...atomsB]) {
+                        if (this.isDerivableFromMid(atom, midInfo) || this.isDerivableFromMid(Atom.invert(atom), midInfo)) {
+                            return {
+                                ok: false,
+                                reason: 'mid-window-derivable',
+                                mapping,
+                                sharedLetters: Array.from(shared),
+                                midWindowDerivable: true
+                            };
                         }
                     }
                 }
 
-                if (midDerivable && !this.transitivityEnabled) {
-                    return { match: false, reason: 'mid-derivable', midWindowDerivable: true };
+                return {
+                    ok: true,
+                    type: 'invertible',
+                    mapping,
+                    sharedLetters: Array.from(shared),
+                    midWindowDerivable: false
+                };
+            }
+
+            computeCertificate(nBackPremise, candidatePremise, midAtoms, windowAtoms = []) {
+                if (!nBackPremise) {
+                    return { match: false, reason: 'no-nback' };
+                }
+
+                if (nBackPremise.toKey() === candidatePremise.toKey()) {
+                    return { match: false, reason: 'identity' };
+                }
+
+                const result = this.Equivalent(nBackPremise, candidatePremise, windowAtoms, midAtoms || []);
+                if (!result.ok) {
+                    const response = { match: false, reason: result.reason };
+                    if (result.reason === 'mid-window-derivable' || result.midWindowDerivable) {
+                        response.midWindowDerivable = true;
+                        if (this.transitivityEnabled) {
+                            return {
+                                match: true,
+                                certificate: {
+                                    type: 'invertible',
+                                    mapping: result.mapping || [],
+                                    sharedLetters: result.sharedLetters || [],
+                                    parity: true,
+                                    midWindowDerivable: true
+                                },
+                                midWindowDerivable: true
+                            };
+                        }
+                    }
+                    return response;
                 }
 
                 const certificate = {
-                    type: 'invertible',
-                    mapping,
-                    sharedLetters,
+                    type: result.type,
+                    mapping: result.mapping,
+                    sharedLetters: result.sharedLetters,
                     parity: true,
-                    midWindowDerivable: midDerivable
+                    midWindowDerivable: false
                 };
 
-                return { match: true, certificate, midWindowDerivable: midDerivable };
+                return { match: true, certificate, midWindowDerivable: false };
             }
         }
 
@@ -1341,6 +1454,9 @@
                 this.flips = new Map();
                 this.matchModeBag = [];
                 this.decoyModeBag = [];
+                this.foilRate = conflictConfig.foilRate;
+                this.foilTypes = Object.keys(conflictConfig.foilTypesWeights);
+                this.foilWeights = this.foilTypes.map(type => conflictConfig.foilTypesWeights[type]);
             }
 
             plan(totalTrials, n) {
@@ -1386,6 +1502,22 @@
                 return this.decoyModeBag.pop();
             }
 
+            sampleFoilType() {
+                if (this.foilTypes.length === 0) {
+                    return null;
+                }
+                return this.rng.weightedChoice(this.foilTypes, this.foilWeights);
+            }
+
+            maybePlanFoil() {
+                if (this.foilRate <= 0) return null;
+                if (this.rng.next() < this.foilRate) {
+                    const type = this.sampleFoilType();
+                    return type ? { type } : null;
+                }
+                return null;
+            }
+
             wouldRepeat(history, decision) {
                 const window = [...history, decision];
                 if (window.length < 24) return false;
@@ -1413,23 +1545,76 @@
         }
 
         class GameLogger {
-            constructor() {
+            constructor(limitBytes = 5 * 1024 * 1024) {
                 this.entries = [];
+                this.entrySizes = [];
+                this.archivedChunks = [];
+                this.sizeLimit = limitBytes;
+                this.sizeEstimate = 0;
+            }
+
+            estimateSize(entry) {
+                try {
+                    return JSON.stringify(entry).length;
+                } catch (error) {
+                    return 0;
+                }
+            }
+
+            flushToArchive() {
+                const keep = Math.min(1000, this.entries.length);
+                const flushCount = this.entries.length - keep;
+                if (flushCount <= 0) return false;
+                const flushedEntries = this.entries.splice(0, flushCount);
+                const flushedSizes = this.entrySizes.splice(0, flushCount);
+                this.archivedChunks.push(JSON.stringify(flushedEntries));
+                const reclaimed = flushedSizes.reduce((acc, value) => acc + value, 0);
+                this.sizeEstimate = Math.max(0, this.sizeEstimate - reclaimed);
+                return true;
             }
 
             add(entry) {
+                const size = this.estimateSize(entry);
                 this.entries.push(entry);
+                this.entrySizes.push(size);
+                this.sizeEstimate += size;
+                while (this.sizeEstimate > this.sizeLimit) {
+                    const flushed = this.flushToArchive();
+                    if (!flushed) {
+                        break;
+                    }
+                }
             }
 
             reset() {
                 this.entries = [];
+                this.entrySizes = [];
+                this.archivedChunks = [];
+                this.sizeEstimate = 0;
+            }
+
+            getEntriesSnapshot() {
+                const snapshot = [];
+                for (const chunk of this.archivedChunks) {
+                    try {
+                        const parsed = JSON.parse(chunk);
+                        if (Array.isArray(parsed)) {
+                            snapshot.push(...parsed);
+                        }
+                    } catch (error) {
+                        console.warn('Failed to parse archived log chunk', error);
+                    }
+                }
+                snapshot.push(...this.entries);
+                return snapshot;
             }
 
             toCSV() {
-                if (this.entries.length === 0) return '';
-                const headers = Object.keys(this.entries[0]);
+                const entries = this.getEntriesSnapshot();
+                if (entries.length === 0) return '';
+                const headers = Object.keys(entries[0]);
                 const rows = [headers.join(',')];
-                this.entries.forEach(entry => {
+                entries.forEach(entry => {
                     const row = headers.map(key => {
                         const value = entry[key];
                         if (value === null || value === undefined) return '';
@@ -1444,7 +1629,7 @@
             }
 
             toJSON() {
-                return JSON.stringify(this.entries, null, 2);
+                return JSON.stringify(this.getEntriesSnapshot(), null, 2);
             }
         }
 
@@ -1553,7 +1738,8 @@
                     nBackPremise,
                     middleAtoms,
                     avoidLetters,
-                    allowOverride
+                    allowOverride,
+                    foilPlan
                 } = options;
 
                 const windowAtoms = this.state.getWindowAtoms();
@@ -1566,33 +1752,67 @@
                     mode = this.planner.chooseConflictMode(effectiveMatch);
                 }
 
+                let activeFoilPlan = (!effectiveMatch && foilPlan && typeof foilPlan.type === 'string') ? { type: foilPlan.type } : null;
+                let foilAttempts = 0;
+
                 while (attempts < MAX_GENERATION_ATTEMPTS) {
                     const expand = attempts > 0 && attempts % NOVELTY_OVERRIDE_THRESHOLD === 0;
                     if (expand) expanded = true;
-                    const pool = this.state.letterPool.nextPool(k, { expand });
-                    const context = {
-                        mode,
-                        plannedMatch: effectiveMatch,
-                        nBackPremise,
-                        pool,
-                        k,
-                        n,
-                        trialIndex,
-                        middleAtoms,
-                        avoidLetters,
-                        state: this.state,
-                        rng: this.state.rng
-                    };
-                    const candidateAtoms = this.makePremiseWithMode(mode, context);
-                    attempts++;
-                    if (!candidateAtoms) {
-                        if (attempts % 12 === 0 && this.planner) {
-                            mode = this.planner.chooseConflictMode(effectiveMatch);
+
+                    let candidatePremise = null;
+                    let candidateAtoms = null;
+                    let modeUsed = mode;
+                    let foilType = null;
+
+                    if (!effectiveMatch && activeFoilPlan && nBackPremise) {
+                        const foilResult = this.buildFoilPremise(activeFoilPlan.type, {
+                            referencePremise: nBackPremise,
+                            windowAtoms,
+                            middleAtoms,
+                            avoidLetters
+                        });
+                        foilAttempts++;
+                        if (foilResult) {
+                            candidatePremise = foilResult.premise;
+                            candidateAtoms = candidatePremise.atoms;
+                            foilType = foilResult.foilType;
+                            modeUsed = `FOIL_${foilResult.foilType}`;
+                        } else if (foilAttempts >= 60) {
+                            activeFoilPlan = null;
                         }
-                        continue;
                     }
 
-                    const premise = new Premise(candidateAtoms);
+                    if (!candidatePremise) {
+                        const pool = this.state.letterPool.nextPool(k, { expand });
+                        const context = {
+                            mode,
+                            plannedMatch: effectiveMatch,
+                            nBackPremise,
+                            pool,
+                            k,
+                            n,
+                            trialIndex,
+                            middleAtoms,
+                            avoidLetters,
+                            state: this.state,
+                            rng: this.state.rng
+                        };
+                        const atomsFromMode = this.makePremiseWithMode(mode, context);
+                        attempts++;
+                        if (!atomsFromMode) {
+                            if (attempts % 12 === 0 && this.planner) {
+                                mode = this.planner.chooseConflictMode(effectiveMatch);
+                            }
+                            continue;
+                        }
+                        candidateAtoms = atomsFromMode;
+                        candidatePremise = new Premise(atomsFromMode);
+                    } else {
+                        attempts++;
+                        candidateAtoms = candidatePremise.atoms;
+                    }
+
+                    const premise = candidatePremise;
                     const features = premise.getFeatures();
                     const signatures = this.state.novelty.buildSignatures(premise);
                     const novelty = this.state.novelty.evaluate(premise, signatures, trialIndex);
@@ -1610,14 +1830,14 @@
                     let midDerivable = false;
 
                     if (effectiveMatch) {
-                        const equivalence = this.equivalence.computeCertificate(nBackPremise, premise, middleAtoms);
+                        const equivalence = this.equivalence.computeCertificate(nBackPremise, premise, middleAtoms, windowAtoms);
                         if (!equivalence.match) {
                             continue;
                         }
                         certificate = equivalence.certificate;
                         midDerivable = equivalence.midWindowDerivable;
                     } else if (nBackPremise) {
-                        const check = this.equivalence.computeCertificate(nBackPremise, premise, middleAtoms);
+                        const check = this.equivalence.computeCertificate(nBackPremise, premise, middleAtoms, windowAtoms);
                         if (check.match) {
                             continue;
                         }
@@ -1633,8 +1853,10 @@
                             certificate,
                             midDerivable,
                             attempts,
-                            modeUsed: mode,
-                            features
+                            modeUsed,
+                            features,
+                            foilType,
+                            score
                         };
                     }
 
@@ -1677,6 +1899,267 @@
                             ? this.buildMatchCandidate(context.nBackPremise, context.pool, context.k)
                             : this.buildNovelPremise(context.pool, context.k, context.avoidLetters);
                 }
+            }
+
+            buildFoilPremise(type, context) {
+                const { referencePremise, windowAtoms, middleAtoms, avoidLetters } = context;
+                if (!referencePremise) return null;
+                const maxAttempts = 80;
+                for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                    let candidate = null;
+                    switch (type) {
+                        case 'ANCHOR_ONE':
+                            candidate = this.makeAnchorOneFoil(referencePremise);
+                            break;
+                        case 'PAIR_SWAP':
+                            candidate = this.makePairSwapFoil(referencePremise);
+                            break;
+                        case 'PARITY_OFF':
+                            candidate = this.makeParityOffFoil(referencePremise);
+                            break;
+                        case 'AXIS_ORTHO':
+                            candidate = this.makeAxisOrthoFoil(referencePremise);
+                            break;
+                        case 'DERIVED_IN_ONE':
+                            candidate = this.makeDerivedInOneFoil(referencePremise);
+                            break;
+                        case 'WINDOW_SHADOW':
+                            candidate = this.makeWindowShadowFoil(referencePremise, middleAtoms);
+                            break;
+                        default:
+                            candidate = null;
+                    }
+                    if (!candidate) {
+                        continue;
+                    }
+                    if (avoidLetters) {
+                        const letters = candidate.getLetters();
+                        let blocked = false;
+                        avoidLetters.forEach(letter => {
+                            if (letters.has(letter)) {
+                                blocked = true;
+                            }
+                        });
+                        if (blocked) continue;
+                    }
+                    const sat = this.solver.evaluate(windowAtoms, candidate.atoms);
+                    if (!sat.ok) {
+                        continue;
+                    }
+                    const eq = this.equivalence.Equivalent(referencePremise, candidate, windowAtoms, middleAtoms);
+                    if (eq.ok) {
+                        continue;
+                    }
+                    if (!this.foilReasonMatches(type, eq.reason)) {
+                        continue;
+                    }
+                    return { premise: candidate, foilType: type };
+                }
+                return null;
+            }
+
+            foilReasonMatches(type, reason) {
+                const expected = {
+                    ANCHOR_ONE: 'anchors',
+                    PAIR_SWAP: 'mapping',
+                    PARITY_OFF: 'parity',
+                    AXIS_ORTHO: 'mapping',
+                    DERIVED_IN_ONE: 'parity',
+                    WINDOW_SHADOW: 'mid-window-derivable'
+                };
+                const matchReason = expected[type];
+                if (!matchReason) return true;
+                if (matchReason === reason) return true;
+                if (type === 'DERIVED_IN_ONE' && reason === 'mid-window-derivable') return true;
+                return false;
+            }
+
+            makeAnchorOneFoil(referencePremise) {
+                const refLetters = referencePremise.getLetters();
+                const refArray = Array.from(refLetters);
+                if (refArray.length === 0) return null;
+                const anchor = this.state.rng.choice(refArray);
+                const banned = new Set(refLetters);
+                banned.delete(anchor);
+                const available = this.state.letters.filter(letter => !banned.has(letter));
+                if (available.length === 0) return null;
+                const atoms = [];
+                for (const atom of referencePremise.atoms) {
+                    const axis = atom.axis;
+                    const head = atom.head === anchor ? anchor : this.state.rng.choice(available);
+                    let tail = atom.tail === anchor ? anchor : this.state.rng.choice(available);
+                    let guard = 0;
+                    while (tail === head && guard < 12) {
+                        tail = atom.tail === anchor ? anchor : this.state.rng.choice(available);
+                        guard++;
+                    }
+                    if (tail === head) return null;
+                    atoms.push(new Atom(axis, head, tail));
+                }
+                const premise = new Premise(atoms);
+                const shared = Array.from(premise.getLetters()).filter(letter => refLetters.has(letter));
+                if (shared.length !== 1 || shared[0] !== anchor) return null;
+                return premise;
+            }
+
+            makePairSwapFoil(referencePremise) {
+                const atoms = referencePremise.atoms;
+                if (atoms.length < 2) return null;
+                const heads = atoms.map(atom => atom.head);
+                const tails = atoms.map(atom => atom.tail);
+                for (let attempt = 0; attempt < 40; attempt++) {
+                    const shuffledHeads = this.state.rng.shuffle(heads);
+                    const shuffledTails = this.state.rng.shuffle(tails);
+                    const candidates = [];
+                    const usedKeys = new Set();
+                    let valid = true;
+                    for (let i = 0; i < atoms.length; i++) {
+                        let head = shuffledHeads[i];
+                        let tail = shuffledTails[i];
+                        let guard = 0;
+                        while (head === tail && guard < 8) {
+                            tail = this.state.rng.choice(tails);
+                            guard++;
+                        }
+                        if (head === tail) {
+                            valid = false;
+                            break;
+                        }
+                        const atomCandidate = new Atom(atoms[i].axis, head, tail);
+                        const key = atomCandidate.toKey();
+                        if (usedKeys.has(key)) {
+                            valid = false;
+                            break;
+                        }
+                        if (atomCandidate.equals(atoms[i]) || atomCandidate.equals(Atom.invert(atoms[i]))) {
+                            valid = false;
+                            break;
+                        }
+                        usedKeys.add(key);
+                        candidates.push(atomCandidate);
+                    }
+                    if (!valid) continue;
+                    const premise = new Premise(candidates);
+                    if (premise.toKey() === referencePremise.toKey()) continue;
+                    return premise;
+                }
+                return null;
+            }
+
+            makeParityOffFoil(referencePremise) {
+                const refSet = referencePremise.getLetters();
+                const refLetters = Array.from(refSet);
+                const base = this.cloneAtoms(referencePremise);
+                const originalLength = base.length;
+                if (originalLength === 0) return null;
+                let target = originalLength;
+                if (originalLength === 1) {
+                    target = Math.min(4, 2);
+                } else if (originalLength === 4) {
+                    target = 3;
+                } else {
+                    const delta = this.state.rng.next() < 0.5 ? -1 : 1;
+                    target = Math.min(4, Math.max(1, originalLength + delta));
+                    if (target === originalLength) {
+                        target = Math.max(1, Math.min(4, originalLength - delta));
+                    }
+                    if (target === originalLength) {
+                        target = originalLength + 1 <= 4 ? originalLength + 1 : originalLength - 1;
+                    }
+                }
+                if (target === originalLength) {
+                    target = originalLength + 1 <= 4 ? originalLength + 1 : originalLength - 1;
+                }
+                if (target < 1) target = 1;
+                let atoms = base;
+                if (target < originalLength) {
+                    atoms = base.slice();
+                    while (atoms.length > target) {
+                        const index = this.state.rng.nextInt(0, atoms.length - 1);
+                        atoms.splice(index, 1);
+                    }
+                } else if (target > originalLength) {
+                    atoms = base.slice();
+                    const axes = MATCH_AXES;
+                    let guard = 0;
+                    while (atoms.length < target && guard < 60) {
+                        guard++;
+                        const head = this.state.rng.choice(refLetters);
+                        let tail = this.state.rng.choice(refLetters);
+                        if (tail === head) {
+                            const alternative = this.sampleNewLetter(new Set([...refLetters]));
+                            if (alternative) {
+                                tail = alternative;
+                            }
+                        }
+                        if (tail === head) continue;
+                        const axis = this.state.rng.choice(axes);
+                        const candidate = new Atom(axis, head, tail);
+                        if (atoms.some(atom => atom.toKey() === candidate.toKey())) continue;
+                        atoms.push(candidate);
+                    }
+                    if (atoms.length !== target) return null;
+                }
+                const premise = new Premise(atoms);
+                const shared = Array.from(premise.getLetters()).filter(letter => refSet.has(letter));
+                if (shared.length < 2) return null;
+                return premise;
+            }
+
+            makeAxisOrthoFoil(referencePremise) {
+                const base = this.cloneAtoms(referencePremise);
+                if (base.length === 0) return null;
+                const index = this.state.rng.nextInt(0, base.length - 1);
+                const orthMap = { N: 'E', S: 'W', E: 'N', W: 'S' };
+                const axis = orthMap[base[index].axis];
+                if (!axis) return null;
+                base[index] = new Atom(axis, base[index].head, base[index].tail);
+                return new Premise(base);
+            }
+
+            makeDerivedInOneFoil(referencePremise) {
+                const base = this.cloneAtoms(referencePremise);
+                if (base.length === 0) return null;
+                const additions = [];
+                for (let i = 0; i < base.length; i++) {
+                    for (let j = 0; j < base.length; j++) {
+                        if (i === j) continue;
+                        const a = base[i];
+                        const b = base[j];
+                        if (a.axis !== b.axis) continue;
+                        if (a.tail === b.head && a.head !== b.tail) {
+                            const candidate = new Atom(a.axis, a.head, b.tail);
+                            if (candidate.head !== candidate.tail && !base.some(atom => atom.equals(candidate))) {
+                                additions.push(candidate);
+                            }
+                        }
+                        if (b.tail === a.head && b.head !== a.tail) {
+                            const candidate = new Atom(a.axis, b.head, a.tail);
+                            if (candidate.head !== candidate.tail && !base.some(atom => atom.equals(candidate))) {
+                                additions.push(candidate);
+                            }
+                        }
+                    }
+                }
+                if (additions.length === 0) return null;
+                base.push(this.state.rng.choice(additions));
+                return new Premise(base);
+            }
+
+            makeWindowShadowFoil(referencePremise, middleAtoms) {
+                if (!middleAtoms || middleAtoms.length === 0) return null;
+                const base = this.cloneAtoms(referencePremise);
+                if (base.length === 0) return null;
+                const refLetters = referencePremise.getLetters();
+                const options = middleAtoms.filter(atom => {
+                    const already = base.some(existing => existing.equals(atom));
+                    return !already && (refLetters.has(atom.head) || refLetters.has(atom.tail));
+                });
+                if (options.length === 0) return null;
+                const replacement = this.state.rng.choice(options);
+                const index = this.state.rng.nextInt(0, base.length - 1);
+                base[index] = new Atom(replacement.axis, replacement.head, replacement.tail);
+                return new Premise(base);
             }
 
             cloneAtoms(premise) {
@@ -2155,7 +2638,7 @@
 
         class GameEngine {
             constructor() {
-                this.session = session;
+                this.session = sessionDefaults();
                 this.seedManager = new SeedManager();
                 this.logger = new GameLogger();
                 this.voice = new VoiceSynthesis();
@@ -2218,8 +2701,9 @@
             }
 
             applyNumTrialsFromUI() {
-                const v = Math.max(1, Math.min(10000, parseInt(numTrialsInput.value || '20', 10)));
-                this.session.numTrials = v;
+                const current = loadNumTrials();
+                this.session.numTrials = current;
+                return current;
             }
 
             clearAllTimers() {
@@ -2303,13 +2787,17 @@
             async endSession() {
                 this.session.state = 'STOPPED';
                 this.clearAllTimers();
+                if (window.speechSynthesis && typeof window.speechSynthesis.cancel === 'function') {
+                    window.speechSynthesis.cancel();
+                }
                 await this.voice.cancelAndWait();
                 this.awaitingResponse = false;
                 if (this.responseResolver) {
                     this.responseResolver(null);
                     this.responseResolver = null;
                 }
-                this.speakOnce(`Session complete. ${this.session.numTrials} trials finished.`);
+                const totalTrials = this.session.numTrials;
+                this.speakOnce(`Session complete. ${totalTrials} trials finished.`);
                 this.renderSummary();
                 this.updateUI();
             }
@@ -2449,7 +2937,8 @@
 
             startSession() {
                 if (this.session.state === 'RUNNING') return;
-                this.applyNumTrialsFromUI();
+                this.session = sessionDefaults();
+                const totalPlanned = this.applyNumTrialsFromUI();
                 this.session.trialIndex = 0;
                 this.score = 0;
                 this.correctResponses = 0;
@@ -2469,7 +2958,7 @@
                 this.generator = new PremiseGenerator(this.state, this.solver, this.equivalence);
                 this.planner = new MatchPlanner(this.state.rng);
                 this.generator.setPlanner(this.planner);
-                this.matchSchedule = this.planner.plan(this.totalTrials, this.n);
+                this.matchSchedule = this.planner.plan(totalPlanned, this.n);
                 if (shouldResetLogs) {
                     this.logger.reset();
                 }
@@ -2486,28 +2975,34 @@
                 if (this.session.state !== 'RUNNING' || sessionToken !== this.sessionToken) return;
 
                 const currentIndex = this.session.trialIndex;
-                const plannedMatch = this.matchSchedule[currentIndex] || false;
+                const scheduledMatch = this.matchSchedule[currentIndex] || false;
                 const nBackIndex = currentIndex - this.n;
                 const nBackPremise = nBackIndex >= 0 ? this.currentPremises[nBackIndex] : null;
                 const middleAtoms = nBackIndex >= 0 ? this.state.getConstraintsInRange(nBackIndex + 1, currentIndex - 1) : [];
                 const cooldown = this.state.getActiveCooldown(currentIndex);
 
+                let planMatch = scheduledMatch && Boolean(nBackPremise);
+                let foilPlan = (!planMatch && nBackPremise) ? this.planner.maybePlanFoil() : null;
+
                 let result = this.generator.generate({
                     trialIndex: currentIndex,
                     k: this.k,
                     n: this.n,
-                    plannedMatch,
+                    plannedMatch: planMatch,
                     nBackPremise,
                     middleAtoms,
-                    avoidLetters: plannedMatch ? cooldown : null,
-                    allowOverride: true
+                    avoidLetters: planMatch ? cooldown : null,
+                    allowOverride: true,
+                    foilPlan
                 });
 
                 let plannerFlip = false;
 
-                if (!result && plannedMatch) {
+                if (!result && scheduledMatch) {
                     this.planner.forceFlip(currentIndex);
                     plannerFlip = true;
+                    planMatch = false;
+                    foilPlan = nBackPremise ? this.planner.maybePlanFoil() : null;
                     result = this.generator.generate({
                         trialIndex: currentIndex,
                         k: this.k,
@@ -2516,7 +3011,8 @@
                         nBackPremise,
                         middleAtoms,
                         avoidLetters: null,
-                        allowOverride: true
+                        allowOverride: true,
+                        foilPlan
                     });
                 }
 
@@ -2525,10 +3021,13 @@
                     return;
                 }
 
-                const { premise, signatures, novelty, satResult, certificate, modeUsed, features } = result;
+                const { premise, signatures, novelty, satResult, certificate, modeUsed, features, foilType } = result;
+                const planType = planMatch
+                    ? 'match'
+                    : (foilType ? `foil:${foilType}` : 'nonmatch');
                 const featureSnapshot = features || premise.getFeatures();
                 this.currentPremises.push(premise);
-                this.state.recordPremise(premise, premise.atoms, { plannedMatch, certificate, modeUsed });
+                this.state.recordPremise(premise, premise.atoms, { plannedMatch: planMatch, certificate, modeUsed, foilType });
                 this.state.novelty.register(signatures);
                 this.state.coordinates = satResult.coordinates;
 
@@ -2563,8 +3062,7 @@
                 document.getElementById('no-match-btn').disabled = true;
                 document.getElementById('repeat-btn').disabled = true;
 
-                const certificateMatch = plannedMatch && certificate;
-                const actualMatch = Boolean(certificateMatch);
+                const actualMatch = Boolean(planMatch && certificate);
                 let correct = false;
                 let omission = false;
 
@@ -2617,13 +3115,17 @@
                 const logEntry = {
                     seedSession: this.seedManager.sessionSeed,
                     trialIndex: currentIndex,
+                    trialNumber: currentIndex + 1,
+                    numTrials: this.session.numTrials,
                     n: this.n,
                     k: this.k,
                     letters: Array.from(premise.getLetters()).join(''),
                     atomsCanonical: premise.toKey(),
                     atomsMirrorCanonical: premise.mirrorKey(),
                     isoSignature: premise.isoSignature(),
-                    plannedMatch,
+                    plannedMatch: planMatch,
+                    planType,
+                    foilType: foilType || null,
                     certificate: certificate || null,
                     satStatus: satResult.ok,
                     midWindowDerivable: certificate ? certificate.midWindowDerivable : false,
@@ -2643,7 +3145,7 @@
                 const debug = document.getElementById('debug-content');
                 const el = document.createElement('div');
                 el.className = 'debug-premise';
-                el.textContent = `Trial ${entry.trialIndex}: ${entry.atomsCanonical} | Match=${entry.plannedMatch} | Response=${entry.response.choice}`;
+                el.textContent = `Trial ${entry.trialIndex}: ${entry.atomsCanonical} | Plan=${entry.planType} | Response=${entry.response.choice}`;
                 debug.prepend(el);
                 while (debug.childElementCount > 20) {
                     debug.removeChild(debug.lastChild);
@@ -2681,7 +3183,7 @@
             exportData() {
                 const data = {
                     seedSession: this.seedManager.sessionSeed,
-                    entries: this.logger.entries
+                    entries: this.logger.getEntriesSnapshot()
                 };
                 const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
