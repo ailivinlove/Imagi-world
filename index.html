@@ -883,6 +883,8 @@
             }
         };
 
+        const AdvancePolicy = Object.freeze({ ACTIVE: 'active', LISTEN: 'listen' });
+
         const NUM_TRIALS_KEY = 'numTrials';
         const LISTEN_ONLY_KEY = 'listenOnly';
         const numTrialsInput = document.getElementById('numTrialsInput');
@@ -1578,6 +1580,109 @@
                 hint.hidden = !on;
             }
         }
+
+        function cancelSpeechImmediately() {
+            try {
+                if (window.speechSynthesis) {
+                    window.speechSynthesis.cancel();
+                }
+            } catch {}
+        }
+
+        const Timer = (() => {
+            let id = 0;
+            const live = new Map();
+            function clear(timerId) {
+                const entry = live.get(timerId);
+                if (!entry) return;
+                clearTimeout(entry.handle);
+                live.delete(timerId);
+            }
+            return {
+                set(label, ms, trialToken, phaseToken, signal, callback) {
+                    const timerId = ++id;
+                    const start = performance.now();
+                    const handle = setTimeout(() => {
+                        if (!engine || !engine.isTokenValid(trialToken, phaseToken)) {
+                            clear(timerId);
+                            return;
+                        }
+                        live.delete(timerId);
+                        callback && callback();
+                    }, ms);
+                    live.set(timerId, { handle, label, trialToken, phaseToken, start });
+                    if (signal) {
+                        signal.addEventListener('abort', () => clear(timerId), { once: true });
+                    }
+                    return timerId;
+                },
+                clear,
+                cancelAll() {
+                    for (const entry of live.values()) {
+                        clearTimeout(entry.handle);
+                    }
+                    live.clear();
+                },
+                live
+            };
+        })();
+
+        function bindTrialButtons(onMatch, onNo) {
+            const matchBtn = document.getElementById('match-btn');
+            const noMatchBtn = document.getElementById('no-match-btn');
+            matchBtn?.addEventListener('click', onMatch, { once: true });
+            noMatchBtn?.addEventListener('click', onNo, { once: true });
+        }
+
+        function unbindTrialButtons(onMatch, onNo) {
+            const matchBtn = document.getElementById('match-btn');
+            const noMatchBtn = document.getElementById('no-match-btn');
+            matchBtn?.removeEventListener('click', onMatch);
+            noMatchBtn?.removeEventListener('click', onNo);
+        }
+
+        function estimateUtteranceMs(text, rate = 0.9) {
+            const safeText = text || '';
+            const cps = 12 * rate;
+            return Math.max(900, Math.min(9000, Math.round((safeText.length / Math.max(1, cps)) * 1000) + 300));
+        }
+
+        function formatPremiseForSpeech(premise) {
+            if (!premise) return '';
+            if (typeof premise.toNaturalSpeech === 'function') {
+                return premise.toNaturalSpeech();
+            }
+            return String(premise);
+        }
+
+        let engine = null;
+
+        let heartbeatHandle = null;
+        function wireHeartbeat(sessionMeta) {
+            clearHeartbeat();
+            heartbeatHandle = setInterval(() => {
+                if (!engine || !engine.sessionMeta || engine.sessionMeta.epoch !== sessionMeta.epoch) {
+                    clearHeartbeat();
+                    return;
+                }
+                engine.nudgeIfStalled();
+            }, 500);
+        }
+
+        function clearHeartbeat() {
+            if (heartbeatHandle) {
+                clearInterval(heartbeatHandle);
+                heartbeatHandle = null;
+            }
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            try {
+                if (window.speechSynthesis) {
+                    window.speechSynthesis.resume();
+                }
+            } catch {}
+        });
 
         function loadNumTrials() {
             const v = parseInt(localStorage.getItem(NUM_TRIALS_KEY) || '20', 10);
@@ -3628,6 +3733,14 @@
                 return this.voice ? `${this.voice.name} (${this.voice.lang})` : 'Voice not initialized';
             }
 
+            getLockedVoice() {
+                return this.voice;
+            }
+
+            getSpeechProfile() {
+                return { rate: this.rate, pitch: this.pitch, volume: this.volume };
+            }
+
             speak(text, sessionToken) {
                 return new Promise(resolve => {
                     this.queue.push({ text, resolve, sessionToken });
@@ -3663,7 +3776,7 @@
             }
 
             async cancelAndWait() {
-                this.synth.cancel();
+                cancelSpeechImmediately();
                 this.isSpeaking = false;
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
@@ -3684,11 +3797,6 @@
                 this.awaitingResponse = false;
                 this.sessionToken = 0;
                 this.responseResolver = null;
-                this.responseTimer = null;
-                this.pendingTrialHandle = null;
-                this.passiveTimer = null;
-                this.passiveAdvanceComplete = null;
-                this.passiveAdvanceResolver = null;
                 this.currentTrialContext = null;
                 this.responseStartTime = 0;
                 this.currentPremises = [];
@@ -3703,6 +3811,12 @@
                 this.pendingPlannerFlip = false;
                 this.pendingRestart = false;
                 this.statusMessage = 'Idle';
+                this.sessionMeta = null;
+                this.lastButtonAt = 0;
+                this.ttsFallbackTriggered = false;
+                this.resetResponseTimer = null;
+                this.resetPassiveTimer = null;
+                this.lastActivityMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
             }
 
             get n() {
@@ -3741,43 +3855,6 @@
                 const current = loadNumTrials();
                 this.session.numTrials = current;
                 return current;
-            }
-
-            clearAllTimers() {
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                if (this.pendingTrialHandle) {
-                    clearTimeout(this.pendingTrialHandle);
-                    this.pendingTrialHandle = null;
-                }
-                if (this.passiveTimer) {
-                    clearTimeout(this.passiveTimer);
-                    this.passiveTimer = null;
-                }
-            }
-
-            setupPassiveAdvance(context, complete) {
-                this.currentTrialContext = context;
-                this.passiveAdvanceComplete = complete;
-                if (this.passiveTimer) {
-                    clearTimeout(this.passiveTimer);
-                    this.passiveTimer = null;
-                }
-                const delay = Math.max(0, Math.round(this.secondsPerTrial * 1000));
-                this.passiveTimer = setTimeout(() => {
-                    this.passiveTimer = null;
-                    const done = this.passiveAdvanceComplete;
-                    this.passiveAdvanceComplete = null;
-                    if (done) {
-                        done();
-                    }
-                }, delay);
-                const repeatBtn = document.getElementById('repeat-btn');
-                if (repeatBtn) {
-                    repeatBtn.disabled = false;
-                }
             }
 
             finalizeTrial(context, outcome) {
@@ -3829,7 +3906,11 @@
                     modeListenOnly: outcome.listenOnly,
                     inputExpected: !outcome.listenOnly,
                     passiveAdvance: outcome.passiveAdvance,
-                    groundTruthMatch: context.actualMatch
+                    timeout: outcome.timeout,
+                    groundTruthMatch: context.actualMatch,
+                    mode: this.sessionMeta ? this.sessionMeta.policy : (this.session.flags && this.session.flags.listenOnly ? AdvancePolicy.LISTEN : AdvancePolicy.ACTIVE),
+                    ttsFallback: outcome.ttsFallback ? true : false,
+                    trialTokenAtStart: context.trialToken || null
                 };
 
                 this.logger.add(logEntry);
@@ -3838,9 +3919,8 @@
                 if (repeatBtn) {
                     repeatBtn.disabled = true;
                 }
-                this.passiveAdvanceComplete = null;
-                this.passiveAdvanceResolver = null;
                 this.currentTrialContext = null;
+                window.forceCurrentTrialTimeout = null;
             }
 
             speakOnce(text) {
@@ -3851,94 +3931,6 @@
             renderSummary() {
                 this.statusMessage = `Session complete. ${this.session.numTrials} trials finished.`;
                 document.getElementById('feedback').textContent = '';
-            }
-
-            scheduleNextTrial() {
-                if (this.session.state !== 'RUNNING') return;
-                if (this.pendingTrialHandle) {
-                    clearTimeout(this.pendingTrialHandle);
-                    this.pendingTrialHandle = null;
-                }
-                if (this.session.trialIndex >= this.session.numTrials) {
-                    this.endSession();
-                    return;
-                }
-
-                const token = this.sessionToken;
-                this.pendingTrialHandle = setTimeout(async () => {
-                    this.pendingTrialHandle = null;
-                    if (token !== this.sessionToken || this.session.state !== 'RUNNING') {
-                        return;
-                    }
-                    try {
-                        await this.runTrial(token);
-                        if (token === this.sessionToken) {
-                            this.onTrialFinished();
-                        }
-                    } catch (error) {
-                        console.error('Trial execution failed', error);
-                        await this.stopSession(false);
-                    }
-                }, 0);
-            }
-
-            onTrialFinished() {
-                if (this.session.state !== 'RUNNING') return;
-                this.session.trialIndex += 1;
-                this.updateUI();
-                if (this.session.trialIndex >= this.session.numTrials) {
-                    this.endSession();
-                } else {
-                    this.scheduleNextTrial();
-                }
-            }
-
-            async stopSession(skipSummary = false) {
-                const wasRunning = this.session.state === 'RUNNING' || this.session.state === 'PAUSED';
-                this.session.state = 'STOPPED';
-                this.sessionToken += 1;
-                this.clearAllTimers();
-                if (this.passiveAdvanceResolver) {
-                    const resolver = this.passiveAdvanceResolver;
-                    this.passiveAdvanceResolver = null;
-                    resolver();
-                }
-                this.passiveAdvanceComplete = null;
-                this.currentTrialContext = null;
-                await this.voice.cancelAndWait();
-                this.awaitingResponse = false;
-                if (this.responseResolver) {
-                    this.responseResolver(null);
-                    this.responseResolver = null;
-                }
-                if (!skipSummary && wasRunning) {
-                    this.statusMessage = 'Stopped';
-                }
-                this.updateUI();
-            }
-
-            async endSession() {
-                this.session.state = 'STOPPED';
-                this.clearAllTimers();
-                if (window.speechSynthesis && typeof window.speechSynthesis.cancel === 'function') {
-                    window.speechSynthesis.cancel();
-                }
-                await this.voice.cancelAndWait();
-                this.awaitingResponse = false;
-                if (this.responseResolver) {
-                    this.responseResolver(null);
-                    this.responseResolver = null;
-                }
-                const totalTrials = this.session.numTrials;
-                this.speakOnce(`Session complete. ${totalTrials} trials finished.`);
-                this.renderSummary();
-                this.updateUI();
-            }
-
-            async restartSession() {
-                this.pendingRestart = true;
-                await this.stopSession(true);
-                this.startSession();
             }
 
             async initialize() {
@@ -4002,8 +3994,6 @@
                 document.getElementById('stop-btn').addEventListener('click', () => {
                     this.stopSession(false);
                 });
-                document.getElementById('match-btn').addEventListener('click', () => this.handleResponse(true));
-                document.getElementById('no-match-btn').addEventListener('click', () => this.handleResponse(false));
                 document.getElementById('repeat-btn').addEventListener('click', () => this.handleRepeat());
 
                 document.getElementById('preview-btn').addEventListener('click', async () => {
@@ -4012,17 +4002,6 @@
                         new Atom('E', 'C', 'D')
                     ]);
                     await this.voice.speakPremise(previewPremise, 0);
-                });
-
-                document.addEventListener('keydown', (e) => {
-                    if (!this.awaitingResponse) return;
-                    if (e.code === 'Space') {
-                        e.preventDefault();
-                        this.handleResponse(true);
-                    } else if (e.code === 'Enter') {
-                        e.preventDefault();
-                        this.handleResponse(false);
-                    }
                 });
 
                 document.getElementById('export-btn').addEventListener('click', () => {
@@ -4068,19 +4047,16 @@
                 document.getElementById('stop-btn').disabled = !running;
             }
 
-            startSession() {
-                if (this.session.state === 'RUNNING') return;
-                this.clearAllTimers();
-                this.passiveAdvanceComplete = null;
-                this.passiveAdvanceResolver = null;
-                this.currentTrialContext = null;
+            async startSession() {
+                if (!this.debounce()) return;
+                await this.stopSession(true);
                 this.session = sessionDefaults();
                 if (!this.session.flags) {
-                    this.session.flags = { listenOnly: loadListenOnly() };
-                } else {
-                    this.session.flags.listenOnly = loadListenOnly();
+                    this.session.flags = {};
                 }
+                this.session.flags.listenOnly = loadListenOnly();
                 const totalPlanned = this.applyNumTrialsFromUI();
+                this.session.numTrials = totalPlanned;
                 this.session.trialIndex = 0;
                 this.score = 0;
                 this.correctResponses = 0;
@@ -4088,6 +4064,11 @@
                 this.omissions = 0;
                 this.recentAccuracy = [];
                 this.pendingPlannerFlip = false;
+                this.ttsFallbackTriggered = false;
+                this.currentTrialContext = null;
+                this.resetResponseTimer = null;
+                this.resetPassiveTimer = null;
+                this.lastActivityMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
                 const shouldResetLogs = !this.pendingRestart || this.resetOnRestart;
                 this.pendingRestart = false;
@@ -4108,78 +4089,102 @@
                 this.statusMessage = `Running (n=${this.n}, k=${this.k})`;
                 this.session.state = 'RUNNING';
                 this.sessionToken += 1;
-
                 this.updateUI();
-                this.scheduleNextTrial();
+
+                const meta = this.createSessionMeta();
+                this.sessionMeta = meta;
+                wireHeartbeat(meta);
+
+                this.runLoop(meta).catch(error => {
+                    console.error('runLoop', error);
+                    if (!meta.abort.signal.aborted) {
+                        this.statusMessage = 'Error: session halted';
+                        this.stopSession(false);
+                    }
+                });
             }
 
-            async runTrial(sessionToken) {
-                if (this.session.state !== 'RUNNING' || sessionToken !== this.sessionToken) return;
+            createSessionMeta() {
+                const epoch = cryptoRandom32() ^ (Math.random() * 1e9 | 0);
+                return {
+                    epoch,
+                    numTrials: this.session.numTrials,
+                    trialIndex: 0,
+                    trialToken: 0,
+                    phaseToken: 0,
+                    policy: loadListenOnly() ? AdvancePolicy.LISTEN : AdvancePolicy.ACTIVE,
+                    abort: new AbortController(),
+                    omissions: 0
+                };
+            }
 
-                const currentIndex = this.session.trialIndex;
-                const scheduledMatch = this.matchSchedule[currentIndex] || false;
-                const nBackIndex = currentIndex - this.n;
-                const nBackPremise = nBackIndex >= 0 ? this.currentPremises[nBackIndex] : null;
-                const middleAtoms = nBackIndex >= 0 ? this.state.getConstraintsInRange(nBackIndex + 1, currentIndex - 1) : [];
-                const cooldown = this.state.getActiveCooldown(currentIndex);
-
-                let planMatch = scheduledMatch && Boolean(nBackPremise);
-                let foilPlan = (!planMatch && nBackPremise) ? this.planner.maybePlanFoil() : null;
-
-                let result = this.generator.generate({
-                    trialIndex: currentIndex,
-                    k: this.k,
-                    n: this.n,
-                    plannedMatch: planMatch,
-                    nBackPremise,
-                    middleAtoms,
-                    avoidLetters: planMatch ? cooldown : null,
-                    allowOverride: true,
-                    foilPlan
-                });
-
-                let plannerFlip = false;
-
-                if (!result && scheduledMatch) {
-                    this.planner.forceFlip(currentIndex);
-                    plannerFlip = true;
-                    planMatch = false;
-                    foilPlan = nBackPremise ? this.planner.maybePlanFoil() : null;
-                    result = this.generator.generate({
-                        trialIndex: currentIndex,
-                        k: this.k,
-                        n: this.n,
-                        plannedMatch: false,
-                        nBackPremise,
-                        middleAtoms,
-                        avoidLetters: null,
-                        allowOverride: true,
-                        foilPlan
-                    });
+            debounce() {
+                const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                if (now - this.lastButtonAt < 250) {
+                    return false;
                 }
+                this.lastButtonAt = now;
+                return true;
+            }
 
-                if (!result) {
-                    await this.stopSession(false);
-                    return;
+            isTokenValid(trialToken, phaseToken) {
+                const meta = this.sessionMeta;
+                if (!meta) return false;
+                if (meta.abort.signal.aborted) return false;
+                if (typeof trialToken === 'number' && meta.trialToken !== trialToken) return false;
+                if (typeof phaseToken === 'number' && phaseToken !== undefined && phaseToken !== null && meta.phaseToken !== phaseToken) return false;
+                return true;
+            }
+
+            async runLoop(meta) {
+                const signal = meta.abort.signal;
+                while (!signal.aborted && meta.trialIndex < meta.numTrials) {
+                    meta.policy = loadListenOnly() ? AdvancePolicy.LISTEN : AdvancePolicy.ACTIVE;
+                    this.session.flags.listenOnly = meta.policy === AdvancePolicy.LISTEN;
+                    meta.trialToken += 1;
+                    meta.phaseToken = 0;
+                    const trialToken = meta.trialToken;
+                    this.lastActivityMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                    await this.runSingleTrial(meta, meta.trialIndex, trialToken, signal);
+                    if (signal.aborted) break;
+                    meta.trialIndex += 1;
+                    this.session.trialIndex = meta.trialIndex;
+                    this.updateUI();
+                    this.lastActivityMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
                 }
+                if (!signal.aborted) {
+                    await this.endSessionNonintrusive(meta);
+                }
+            }
 
+            async runSingleTrial(meta, currentIndex, trialToken, signal) {
+                if (signal.aborted) return;
+                const plan = this.planTrialSafe(currentIndex);
+                const generation = await this.generatePremiseGuaranteed(plan);
+                if (!this.isTokenValid(trialToken)) return;
+
+                const { result, planMatch, plannerFlip } = generation;
                 const { premise, signatures, novelty, satResult, certificate, modeUsed, features, foilType } = result;
-                const planType = planMatch
-                    ? 'match'
-                    : (foilType ? `foil:${foilType}` : 'nonmatch');
+                const planType = planMatch ? 'match' : (foilType ? `foil:${foilType}` : 'nonmatch');
                 const featureSnapshot = features || premise.getFeatures();
+
                 this.currentPremises.push(premise);
                 this.state.recordPremise(premise, premise.atoms, { plannedMatch: planMatch, certificate, modeUsed, foilType });
                 this.state.novelty.register(signatures);
                 this.state.coordinates = satResult.coordinates;
 
-                document.getElementById('premise-display').textContent = premise.toString();
-                await this.voice.speakPremise(premise, sessionToken);
-                if (sessionToken !== this.sessionToken) return;
+                const display = document.getElementById('premise-display');
+                if (display) {
+                    display.textContent = premise.toString();
+                }
+                const feedbackEl = document.getElementById('feedback');
+                if (feedbackEl) {
+                    feedbackEl.textContent = '';
+                    feedbackEl.className = 'feedback';
+                }
 
-                const actualMatch = Boolean(planMatch && certificate);
-                const context = {
-                    sessionToken,
+                this.currentTrialContext = {
+                    sessionToken: this.sessionToken,
                     currentIndex,
                     planMatch,
                     planType,
@@ -4189,78 +4194,66 @@
                     noveltyScores: novelty.noveltyScores,
                     featureSnapshot,
                     modeUsed,
-                    actualMatch,
+                    actualMatch: Boolean(planMatch && certificate),
                     premise,
-                    plannerFlip: plannerFlip || this.planner.wasFlipped(currentIndex)
+                    plannerFlip: plannerFlip || this.planner.wasFlipped(currentIndex),
+                    trialToken
                 };
 
-                const listenOnly = Boolean(this.session.flags && this.session.flags.listenOnly);
-                const feedbackEl = document.getElementById('feedback');
+                meta.phaseToken += 1;
+                window.currentPremiseText = formatPremiseForSpeech(premise);
+                this.ttsFallbackTriggered = false;
+                await this.speakPremiseSafe(premise, trialToken, signal);
+                if (!this.isTokenValid(trialToken)) return;
 
-                if (listenOnly) {
-                    document.getElementById('match-btn').disabled = true;
-                    document.getElementById('no-match-btn').disabled = true;
+                const repeatBtn = document.getElementById('repeat-btn');
+                repeatBtn && (repeatBtn.disabled = false);
+
+                if (meta.policy === AdvancePolicy.LISTEN) {
+                    const matchBtn = document.getElementById('match-btn');
+                    const noMatchBtn = document.getElementById('no-match-btn');
+                    matchBtn && (matchBtn.disabled = true);
+                    noMatchBtn && (noMatchBtn.disabled = true);
                     if (feedbackEl) {
                         feedbackEl.textContent = 'Listening mode active. Auto-advancing...';
                         feedbackEl.className = 'feedback';
                     }
-                    await new Promise(resolve => {
-                        this.passiveAdvanceResolver = resolve;
-                        const complete = () => {
-                            this.passiveAdvanceResolver = null;
-                            if (this.session.state === 'RUNNING' && sessionToken === this.sessionToken) {
-                                this.finalizeTrial(context, {
-                                    choice: null,
-                                    correct: null,
-                                    omission: null,
-                                    rtMs: null,
-                                    passiveAdvance: true,
-                                    listenOnly: true
-                                });
-                            }
-                            resolve();
-                        };
-                        this.setupPassiveAdvance(context, complete);
+                    await this.dwellSafe(this.secondsPerTrial, trialToken, signal);
+                    if (!this.isTokenValid(trialToken)) return;
+                    this.finalizeTrial(this.currentTrialContext, {
+                        choice: null,
+                        correct: null,
+                        omission: null,
+                        rtMs: null,
+                        passiveAdvance: true,
+                        listenOnly: true,
+                        timeout: false,
+                        ttsFallback: this.ttsFallbackTriggered
                     });
-                    if (sessionToken !== this.sessionToken) return;
+                    this.lastActivityMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
                     return;
                 }
 
-                this.awaitingResponse = true;
-                this.responseStartTime = Date.now();
+                const response = await this.collectResponseSafe(this.secondsPerTrial, trialToken, signal);
+                if (!this.isTokenValid(trialToken)) return;
 
-                const response = await new Promise(resolve => {
-                    this.responseResolver = resolve;
-                    document.getElementById('match-btn').disabled = false;
-                    document.getElementById('no-match-btn').disabled = false;
-                    document.getElementById('repeat-btn').disabled = false;
-                    this.responseTimer = setTimeout(() => {
-                        if (this.responseResolver) {
-                            this.responseResolver(null);
-                            this.responseResolver = null;
-                        }
-                    }, this.secondsPerTrial * 1000);
-                });
-
-                if (sessionToken !== this.sessionToken) return;
-
-                this.awaitingResponse = false;
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                document.getElementById('match-btn').disabled = true;
-                document.getElementById('no-match-btn').disabled = true;
-                document.getElementById('repeat-btn').disabled = true;
-
-                let correct = false;
+                let choice = null;
+                let correct = null;
                 let omission = false;
+                let rtMs = null;
 
-                if (response === null) {
+                if (response.type === 'timeout') {
                     omission = true;
                     this.omissions += 1;
-                } else {
-                    correct = response === actualMatch;
+                    if (feedbackEl) {
+                        feedbackEl.textContent = 'Response window expired.';
+                        feedbackEl.className = 'feedback incorrect';
+                    }
+                } else if (response.type === 'answer') {
+                    choice = response.choice;
+                    rtMs = response.rt ?? null;
+                    const actualMatch = this.currentTrialContext.actualMatch;
+                    correct = choice === actualMatch;
                     if (correct) {
                         this.score += 1;
                         this.correctResponses += 1;
@@ -4270,30 +4263,399 @@
                     if (this.recentAccuracy.length > this.M) {
                         this.recentAccuracy.shift();
                     }
-                }
-
-                const rt = response === null ? null : Date.now() - this.responseStartTime;
-                if (feedbackEl) {
-                    if (omission) {
-                        feedbackEl.textContent = 'Response window expired.';
-                        feedbackEl.className = 'feedback incorrect';
-                    } else if (correct) {
-                        feedbackEl.textContent = 'Correct';
-                        feedbackEl.className = 'feedback correct';
-                    } else {
-                        feedbackEl.textContent = 'Incorrect';
-                        feedbackEl.className = 'feedback incorrect';
+                    if (feedbackEl) {
+                        feedbackEl.textContent = correct ? 'Correct' : 'Incorrect';
+                        feedbackEl.className = correct ? 'feedback correct' : 'feedback incorrect';
                     }
                 }
 
-                this.finalizeTrial(context, {
-                    choice: response,
+                this.finalizeTrial(this.currentTrialContext, {
+                    choice,
                     correct,
                     omission,
-                    rtMs: rt,
+                    rtMs,
                     passiveAdvance: false,
-                    listenOnly: false
+                    listenOnly: false,
+                    timeout: response.type === 'timeout',
+                    ttsFallback: this.ttsFallbackTriggered
                 });
+                this.lastActivityMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            }
+
+            planTrialSafe(currentIndex) {
+                const scheduledMatch = this.matchSchedule[currentIndex] || false;
+                const nBackIndex = currentIndex - this.n;
+                const nBackPremise = nBackIndex >= 0 ? this.currentPremises[nBackIndex] : null;
+                const middleAtoms = nBackIndex >= 0 ? this.state.getConstraintsInRange(nBackIndex + 1, currentIndex - 1) : [];
+                const cooldown = this.state.getActiveCooldown(currentIndex);
+                return { trialIndex: currentIndex, scheduledMatch, nBackPremise, middleAtoms, cooldown };
+            }
+
+            async generatePremiseGuaranteed(plan) {
+                const { trialIndex, scheduledMatch, nBackPremise, middleAtoms, cooldown } = plan;
+                let planMatch = scheduledMatch && Boolean(nBackPremise);
+                let plannerFlip = false;
+                let foilPlan = (!planMatch && nBackPremise) ? this.planner.maybePlanFoil() : null;
+                let result = null;
+                for (let attempt = 0; attempt < 30 && !result; attempt++) {
+                    result = this.generator.generate({
+                        trialIndex,
+                        k: this.k,
+                        n: this.n,
+                        plannedMatch: planMatch,
+                        nBackPremise,
+                        middleAtoms,
+                        avoidLetters: planMatch ? cooldown : null,
+                        allowOverride: true,
+                        foilPlan
+                    });
+                    if (result) break;
+                    if (planMatch) {
+                        this.planner.forceFlip(trialIndex);
+                        plannerFlip = true;
+                        planMatch = false;
+                    }
+                    foilPlan = nBackPremise ? this.planner.maybePlanFoil() : null;
+                }
+
+                if (!result) {
+                    result = this.buildNeutralNonMatch(plan);
+                    planMatch = false;
+                }
+
+                return { result, planMatch, plannerFlip };
+            }
+
+            buildNeutralNonMatch(plan) {
+                const windowAtoms = this.state.getWindowAtoms();
+                const axes = ['N', 'S', 'E', 'W'];
+                const attempts = 24;
+                for (let i = 0; i < attempts; i++) {
+                    const axis = axes[this.state.rng.nextInt(0, axes.length - 1)];
+                    const head = this.state.letters[this.state.rng.nextInt(0, this.state.letters.length - 1)];
+                    let tail = this.state.letters[this.state.rng.nextInt(0, this.state.letters.length - 1)];
+                    let guard = 0;
+                    while (tail === head && guard < 12) {
+                        tail = this.state.letters[this.state.rng.nextInt(0, this.state.letters.length - 1)];
+                        guard += 1;
+                    }
+                    if (tail === head) continue;
+                    const premise = new Premise([new Atom(axis, head, tail)]);
+                    if (plan.nBackPremise && plan.nBackPremise.toKey() === premise.toKey()) {
+                        continue;
+                    }
+                    const satResult = this.solver.evaluate(windowAtoms, premise.atoms);
+                    if (!satResult.ok) continue;
+                    const signatures = this.state.novelty.buildSignatures(premise);
+                    const novelty = this.state.novelty.evaluate(premise, signatures, plan.trialIndex);
+                    if (novelty.blocked) continue;
+                    return {
+                        premise,
+                        signatures,
+                        novelty,
+                        satResult,
+                        certificate: null,
+                        modeUsed: 'FALLBACK_NEUTRAL',
+                        features: premise.getFeatures(),
+                        foilType: null
+                    };
+                }
+                const fallbackPremise = new Premise([new Atom('N', 'A', 'B')]);
+                const fallbackSignatures = this.state.novelty.buildSignatures(fallbackPremise);
+                const fallbackSat = this.solver.evaluate(windowAtoms, fallbackPremise.atoms);
+                const fallbackNovelty = this.state.novelty.evaluate(fallbackPremise, fallbackSignatures, plan.trialIndex);
+                return {
+                    premise: fallbackPremise,
+                    signatures: fallbackSignatures,
+                    novelty: fallbackNovelty,
+                    satResult: fallbackSat,
+                    certificate: null,
+                    modeUsed: 'FALLBACK_NEUTRAL',
+                    features: fallbackPremise.getFeatures(),
+                    foilType: null
+                };
+            }
+
+            async speakPremiseSafe(premise, trialToken, signal) {
+                await new Promise(resolve => {
+                    cancelSpeechImmediately();
+                    if (typeof SpeechSynthesisUtterance !== 'function' || !window.speechSynthesis) {
+                        resolve();
+                        return;
+                    }
+                    const utteranceText = formatPremiseForSpeech(premise);
+                    const utterance = new SpeechSynthesisUtterance(utteranceText);
+                    const lockedVoice = this.voice.getLockedVoice();
+                    if (lockedVoice) {
+                        utterance.voice = lockedVoice;
+                        utterance.lang = lockedVoice.lang;
+                    }
+                    const profile = this.voice.getSpeechProfile();
+                    utterance.rate = profile.rate;
+                    utterance.pitch = profile.pitch;
+                    utterance.volume = profile.volume;
+
+                    let finished = false;
+                    let attempt = 0;
+                    const maxAttempts = 2;
+                    let fallbackTimer = null;
+
+                    const cleanup = () => {
+                        if (finished) return;
+                        finished = true;
+                        if (fallbackTimer) clearTimeout(fallbackTimer);
+                        resolve();
+                    };
+
+                    const speakOnce = () => {
+                        if (!this.isTokenValid(trialToken)) {
+                            cleanup();
+                            return;
+                        }
+                        attempt += 1;
+                        if (fallbackTimer) clearTimeout(fallbackTimer);
+                        const ms = estimateUtteranceMs(utteranceText, utterance.rate) + 400;
+                        fallbackTimer = setTimeout(() => {
+                            if (!this.isTokenValid(trialToken)) return cleanup();
+                            this.ttsFallbackTriggered = true;
+                            cancelSpeechImmediately();
+                            if (attempt <= maxAttempts) {
+                                setTimeout(() => speakOnce(), 120);
+                            } else {
+                                cleanup();
+                            }
+                        }, ms);
+                        utterance.onend = () => {
+                            if (!this.isTokenValid(trialToken)) return cleanup();
+                            cleanup();
+                        };
+                        utterance.onerror = () => {
+                            if (!this.isTokenValid(trialToken)) return cleanup();
+                            this.ttsFallbackTriggered = true;
+                            cancelSpeechImmediately();
+                            if (attempt <= maxAttempts) {
+                                setTimeout(() => speakOnce(), 120);
+                            } else {
+                                cleanup();
+                            }
+                        };
+                        setTimeout(() => {
+                            if (!this.isTokenValid(trialToken)) return cleanup();
+                            try { speechSynthesis.resume(); } catch {}
+                            speechSynthesis.speak(utterance);
+                        }, 120);
+                    };
+
+                    signal.addEventListener('abort', () => {
+                        cancelSpeechImmediately();
+                        cleanup();
+                    }, { once: true });
+
+                    speakOnce();
+                });
+            }
+
+            async dwellSafe(seconds, trialToken, signal) {
+                return new Promise(resolve => {
+                    const meta = this.sessionMeta;
+                    if (!meta) {
+                        resolve();
+                        return;
+                    }
+                    let timerId = null;
+                    const cleanup = () => {
+                        if (timerId !== null) {
+                            Timer.clear(timerId);
+                            timerId = null;
+                        }
+                        if (this.resetPassiveTimer === startTimer) {
+                            this.resetPassiveTimer = null;
+                        }
+                    };
+                    const startTimer = () => {
+                        if (!this.sessionMeta || this.sessionMeta.abort.signal.aborted) {
+                            cleanup();
+                            resolve();
+                            return;
+                        }
+                        this.sessionMeta.phaseToken += 1;
+                        const phaseToken = this.sessionMeta.phaseToken;
+                        if (timerId !== null) {
+                            Timer.clear(timerId);
+                        }
+                        const duration = Math.max(0, Math.round(seconds * 1000));
+                        timerId = Timer.set('dwell', duration, trialToken, phaseToken, signal, () => {
+                            cleanup();
+                            resolve();
+                        });
+                    };
+                    this.resetPassiveTimer = () => {
+                        if (!this.isTokenValid(trialToken)) return;
+                        startTimer();
+                    };
+                    startTimer();
+                    signal.addEventListener('abort', () => {
+                        cleanup();
+                        resolve();
+                    }, { once: true });
+                });
+            }
+
+            async collectResponseSafe(seconds, trialToken, signal) {
+                return new Promise(resolve => {
+                    const meta = this.sessionMeta;
+                    if (!meta) {
+                        resolve({ type: 'timeout' });
+                        return;
+                    }
+                    const matchBtn = document.getElementById('match-btn');
+                    const noMatchBtn = document.getElementById('no-match-btn');
+                    const repeatBtn = document.getElementById('repeat-btn');
+                    matchBtn && (matchBtn.disabled = false);
+                    noMatchBtn && (noMatchBtn.disabled = false);
+                    repeatBtn && (repeatBtn.disabled = false);
+
+                    let timerId = null;
+                    let settled = false;
+                    let currentPhaseToken = null;
+                    let startTimestamp = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+                    const cleanup = () => {
+                        if (timerId !== null) {
+                            Timer.clear(timerId);
+                            timerId = null;
+                        }
+                        unbindTrialButtons(onMatch, onNo);
+                        document.removeEventListener('keydown', onKeyDown);
+                        if (matchBtn) matchBtn.disabled = true;
+                        if (noMatchBtn) noMatchBtn.disabled = true;
+                        if (repeatBtn) repeatBtn.disabled = true;
+                        this.awaitingResponse = false;
+                        this.responseResolver = null;
+                        window.forceCurrentTrialTimeout = null;
+                        if (this.resetResponseTimer === startTimer) {
+                            this.resetResponseTimer = null;
+                        }
+                    };
+
+                    const settle = payload => {
+                        if (settled) return;
+                        settled = true;
+                        cleanup();
+                        resolve(payload);
+                    };
+
+                    const onMatch = () => settle({ type: 'answer', choice: true, rt: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTimestamp });
+                    const onNo = () => settle({ type: 'answer', choice: false, rt: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTimestamp });
+                    const onKeyDown = (event) => {
+                        if (!this.awaitingResponse || !this.isTokenValid(trialToken, currentPhaseToken)) return;
+                        if (event.code === 'Space') {
+                            event.preventDefault();
+                            onMatch();
+                        } else if (event.code === 'Enter') {
+                            event.preventDefault();
+                            onNo();
+                        }
+                    };
+
+                    const startTimer = () => {
+                        if (!this.sessionMeta || this.sessionMeta.abort.signal.aborted) {
+                            settle({ type: 'timeout' });
+                            return;
+                        }
+                        this.sessionMeta.phaseToken += 1;
+                        currentPhaseToken = this.sessionMeta.phaseToken;
+                        if (timerId !== null) {
+                            Timer.clear(timerId);
+                        }
+                        const duration = Math.max(0, Math.round(seconds * 1000));
+                        timerId = Timer.set('resp', duration, trialToken, currentPhaseToken, signal, () => settle({ type: 'timeout' }));
+                        startTimestamp = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                        this.responseStartTime = startTimestamp;
+                    };
+
+                    this.resetResponseTimer = () => {
+                        if (!this.isTokenValid(trialToken)) return;
+                        startTimer();
+                    };
+
+                    bindTrialButtons(onMatch, onNo);
+                    document.addEventListener('keydown', onKeyDown);
+                    this.awaitingResponse = true;
+                    startTimer();
+                    window.forceCurrentTrialTimeout = () => settle({ type: 'timeout' });
+                    signal.addEventListener('abort', () => settle({ type: 'timeout' }), { once: true });
+                    this.responseResolver = settle;
+                });
+            }
+
+            async stopSession(skipSummary = false) {
+                const wasRunning = this.session && this.session.state === 'RUNNING';
+                if (this.sessionMeta) {
+                    try {
+                        this.sessionMeta.abort.abort();
+                    } catch {}
+                }
+                clearHeartbeat();
+                Timer.cancelAll();
+                cancelSpeechImmediately();
+                window.forceCurrentTrialTimeout = null;
+                this.resetResponseTimer = null;
+                this.resetPassiveTimer = null;
+                this.currentTrialContext = null;
+                this.awaitingResponse = false;
+                this.responseResolver = null;
+                this.sessionMeta = null;
+                if (this.session) {
+                    this.session.state = 'STOPPED';
+                }
+                if (!skipSummary && wasRunning) {
+                    this.statusMessage = 'Stopped';
+                }
+                await this.voice.cancelAndWait();
+                this.updateUI();
+            }
+
+            async endSessionNonintrusive(meta) {
+                clearHeartbeat();
+                this.sessionMeta = null;
+                if (this.session) {
+                    this.session.state = 'STOPPED';
+                }
+                Timer.cancelAll();
+                cancelSpeechImmediately();
+                await this.voice.cancelAndWait();
+                this.speakOnce(`Session complete. ${meta.numTrials} trials finished.`);
+                this.renderSummary();
+                this.updateUI();
+            }
+
+            async restartSession() {
+                if (!this.debounce()) return;
+                this.pendingRestart = true;
+                await this.stopSession(true);
+                await this.startSession();
+            }
+
+            nudgeIfStalled() {
+                const meta = this.sessionMeta;
+                if (!meta || meta.abort.signal.aborted) return;
+                const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                const profile = this.voice.getSpeechProfile();
+                const rate = profile.rate || 0.9;
+                const typical = estimateUtteranceMs(window.currentPremiseText || 'H is east of R; Y is north of X.', rate) + (this.secondsPerTrial * 1000) + 1500;
+                if (now - this.lastActivityMs > typical) {
+                    console.warn('Watchdog nudge');
+                    cancelSpeechImmediately();
+                    if (meta.policy === AdvancePolicy.ACTIVE) {
+                        window.forceCurrentTrialTimeout && window.forceCurrentTrialTimeout();
+                    } else if (this.resetPassiveTimer) {
+                        this.resetPassiveTimer();
+                    } else {
+                        Timer.set('dwell-nudge', 50, meta.trialToken, meta.phaseToken, meta.abort.signal, () => {});
+                    }
+                    this.lastActivityMs = now;
+                }
             }
 
             updateDebugPanel(entry) {
@@ -4307,48 +4669,28 @@
                 }
             }
 
-            handleResponse(isMatch) {
+            resolvePendingResponse(choice) {
                 if (!this.awaitingResponse || !this.responseResolver) return;
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                this.responseResolver(isMatch);
-                this.responseResolver = null;
+                this.responseResolver({ type: 'answer', choice, rt: 0 });
             }
 
             async handleRepeat() {
-                const listenOnlyFlag = Boolean(this.session.flags && this.session.flags.listenOnly);
-                const passiveActive = Boolean(this.currentTrialContext && this.passiveAdvanceComplete);
-                if (listenOnlyFlag || passiveActive) {
-                    if (!this.currentTrialContext || this.session.state !== 'RUNNING') return;
-                    if (this.currentTrialContext.sessionToken !== this.sessionToken) return;
-                    await this.voice.cancelAndWait();
-                    await this.voice.speakPremise(this.currentTrialContext.premise, this.sessionToken);
-                    if (this.session.state !== 'RUNNING') return;
-                    const stillPassive = Boolean(this.session.flags && this.session.flags.listenOnly) || passiveActive;
-                    if (!stillPassive || !this.currentTrialContext || this.currentTrialContext.sessionToken !== this.sessionToken) return;
-                    const complete = this.passiveAdvanceComplete;
-                    if (complete) {
-                        this.setupPassiveAdvance(this.currentTrialContext, complete);
-                    }
-                    return;
-                }
-                if (!this.awaitingResponse) return;
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
+                const meta = this.sessionMeta;
+                const context = this.currentTrialContext;
+                if (!meta || meta.abort.signal.aborted) return;
+                if (!context || context.trialToken !== meta.trialToken) return;
+                if (this.session.state !== 'RUNNING') return;
+                window.currentPremiseText = formatPremiseForSpeech(context.premise);
+                cancelSpeechImmediately();
                 await this.voice.cancelAndWait();
-                await this.voice.speakPremise(this.currentPremises[this.session.trialIndex], this.sessionToken);
-                if (!this.awaitingResponse) return;
-                this.responseStartTime = Date.now();
-                this.responseTimer = setTimeout(() => {
-                    if (this.responseResolver) {
-                        this.responseResolver(null);
-                        this.responseResolver = null;
-                    }
-                }, this.secondsPerTrial * 1000);
+                meta.phaseToken += 1;
+                await this.speakPremiseSafe(context.premise, meta.trialToken, meta.abort.signal);
+                this.lastActivityMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                if (meta.policy === AdvancePolicy.ACTIVE) {
+                    this.resetResponseTimer && this.resetResponseTimer();
+                } else if (this.resetPassiveTimer) {
+                    this.resetPassiveTimer();
+                }
             }
 
             exportData() {
@@ -4995,7 +5337,7 @@
                 engine.omissions = 3;
                 engine.awaitingResponse = false;
                 const before = engine.score;
-                engine.handleResponse(true);
+                engine.resolvePendingResponse(true);
                 return {
                     test: 'Input gating',
                     passed: engine.score === before,
@@ -5017,7 +5359,7 @@
             }
         }
 
-        const engine = new GameEngine();
+        engine = new GameEngine();
         const listenOnlyToggle = document.getElementById('listenOnlyToggle');
         if (listenOnlyToggle) {
             const init = loadListenOnly();
