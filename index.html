@@ -512,6 +512,44 @@
             line-height: 1.6;
         }
 
+        #walkthroughN2 .algo li {
+            margin: 0.25rem 0;
+        }
+
+        #walkthroughN2 .anchors,
+        #walkthroughN2 .returns {
+            margin-left: 1rem;
+        }
+
+        #walkthroughN2 .trials > li {
+            margin: 0.5rem 0;
+            padding: 0.5rem;
+            border: 1px solid var(--border, #444);
+            border-radius: 0.5rem;
+            background: rgba(22, 33, 62, 0.6);
+        }
+
+        #walkthroughN2 .match {
+            color: var(--ok, #2ecc71);
+            font-weight: 600;
+        }
+
+        #walkthroughN2 .nomatch {
+            color: var(--warn, #e67e22);
+            font-weight: 600;
+        }
+
+        #walkthroughN2 .actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        #walkthroughN2 .brandline {
+            margin-bottom: 0.5rem;
+        }
+
         #instContent ul,
         #instContent ol {
             margin-left: 20px;
@@ -956,10 +994,17 @@
                         <li><strong>Analogue / Opposite:</strong> lateral moves preserving or inverting role (East/West).</li>
                         <li><strong>Anchor:</strong> your chosen seed concept for a letter.</li>
                         <li><strong>Compound mapping:</strong> a single letter carrying a composed phrase to satisfy multiple relations (e.g., “chaotic example”).</li>
-                        <li><strong>Reframe:</strong> deliberate change to an anchored concept, logged for consistency tracking.</li>
-                    </ul>
-                `,
+                    <li><strong>Reframe:</strong> deliberate change to an anchored concept, logged for consistency tracking.</li>
+                </ul>
+            `,
                 speech: 'Glossary. Arc of Abstraction: the mental continuum from concrete or particular to abstract or general. Up-shift and Down-shift: moves along the arc, north and south. Analogue and Opposite: lateral moves preserving or inverting role, east and west. Anchor: your chosen seed concept for a letter. Compound mapping: a single letter carrying a composed phrase to satisfy multiple relations, for example Chaotic example. Reframe: deliberate change to an anchored concept, logged for consistency tracking.'
+            },
+            {
+                id: 'walkthrough-n2-10',
+                title: 'n-Back-2: 10-Trial Walkthrough',
+                html: '',
+                render: (mount) => renderWalkthroughN2(mount),
+                speech: walkthroughN2SpeechText()
             }
         ];
 
@@ -1308,6 +1353,171 @@
                 }
             ];
         }
+
+        function walkthroughN2SpeechText() {
+            return [
+                'n-back two, ten trial walkthrough.',
+                'Algorithm reminder: symbol, map a thought, transform by the operation, pair letter and thought, repeat across atoms, recall and update prior pairings when letters return.',
+                'Theme: illumination and understanding.',
+                'Anchors: J equals Candle; D equals Fireworks; X equals Observation; Y equals Generalization; Z equals Anomaly.',
+                'Trial one: D is north of J. Trial two: Z is west of X; Z is south of Y.',
+                'Trial three: J is south of D. Match with trial one.',
+                'Trial four: X is east of Z; Y is north of Z. Match with trial two.',
+                'Trial five: D is east of J. No match with trial three.',
+                'Trial six: Z is west of X; Z is south of Y. Match with trial four.',
+                'Trial seven: J is west of D. Match with trial five.',
+                'Trial eight: X is east of Z. No match with trial six.',
+                'Trial nine: D is east of J. Match with trial seven.',
+                'Trial ten: Z is west of X. Match with trial eight.',
+                'When a letter returns, reuse its concept and update by the new relation; keep coherence across trials.'
+            ].join(' ');
+        }
+
+        function renderWalkthroughN2(mount = document.getElementById('instContent')) {
+            if (!mount) return;
+
+            const html = `
+            <div id="walkthroughN2" class="inst-section">
+                <h3>n-Back-2: 10-Trial Walkthrough</h3>
+
+                <p class="brandline"><strong>Imagi-World trains maximized imagination across the Arc of Abstraction.</strong> You map lived concepts onto letters and move them North/South/East/West while the logic engine keeps relations exact.</p>
+
+                <h4>Quick Algorithm (repeat this every premise)</h4>
+                <ol class="algo">
+                    <li><strong>Symbol →</strong> Note the letter(s) in the current premise.</li>
+                    <li><strong>Map a thought →</strong> Anchor each new letter to a vivid concept (your stream of consciousness).</li>
+                    <li><strong>Transform →</strong> Apply the premise operation to that concept: North = up-shift (more general/intense); South = down-shift (more specific/concrete); East = analogue/sibling; West = opposite/counter-role.</li>
+                    <li><strong>Pairing →</strong> Record the resulting <em>letter ↔ thought</em> pairing for this trial.</li>
+                    <li><strong>Rinse/Repeat →</strong> For multi-atom premises, repeat for each relation in the utterance (semicolon = tiny pause).</li>
+                    <li><strong>Recall & Update →</strong> When a letter reappears later, reuse its prior mapping and <em>update</em> it by the new relation (e.g., if K is north of J, then when P is above K you can infer new context linking P and J, too).</li>
+                </ol>
+
+                <h4>Theme for this walkthrough</h4>
+                <p>We use a coherent theme: <em>Illumination &amp; Understanding</em>. First-time anchors:</p>
+                <ul class="anchors">
+                    <li>J := Candle (steady light)</li>
+                    <li>D := Fireworks (intense/brief light)</li>
+                    <li>X := Observation (raw sighting)</li>
+                    <li>Y := Generalization (above observations)</li>
+                    <li>Z := Anomaly (foil to a typical observation)</li>
+                </ul>
+
+                <h4>Ten Trials at n-Back-2 (MATCH means current ≡ trial t−2 under allowed inversions)</h4>
+
+                <ol class="trials">
+                    <li>
+                        <p><strong>Trial 1 — Premise:</strong> D is north of J.</p>
+                        <p><strong>Mapping:</strong> J=Candle; North → D=Fireworks (up-shift intensity).</p>
+                        <p><strong>n-back-2:</strong> No comparison yet.</p>
+                    </li>
+                    <li>
+                        <p><strong>Trial 2 — Premise:</strong> Z is west of X; Z is south of Y.</p>
+                        <p><strong>Mapping:</strong> X=Observation; Y=Generalization; West → Z=Anomaly (foil to typical observation); South from Y confirms Z is specific.</p>
+                        <p><strong>n-back-2:</strong> No comparison yet.</p>
+                    </li>
+                    <li>
+                        <p><strong>Trial 3 — Premise:</strong> J is south of D.</p>
+                        <p><strong>Mapping:</strong> Reuse J=Candle, D=Fireworks; South means Candle is less intense than Fireworks.</p>
+                        <p><strong>n-back-2 vs Trial 1:</strong> <span class="match">MATCH</span> (inverse: D north of J ↔ J south of D).</p>
+                    </li>
+                    <li>
+                        <p><strong>Trial 4 — Premise:</strong> X is east of Z; Y is north of Z.</p>
+                        <p><strong>Mapping:</strong> Reuse X, Y, Z; East: Observation is a sibling to Anomaly; North: Generalization above Anomaly.</p>
+                        <p><strong>n-back-2 vs Trial 2:</strong> <span class="match">MATCH</span> (Z west of X ↔ X east of Z; Z south of Y ↔ Y north of Z).</p>
+                    </li>
+                    <li>
+                        <p><strong>Trial 5 — Premise:</strong> D is east of J.</p>
+                        <p><strong>Mapping:</strong> Reuse D, J; East: both are light sources (analogue). Optionally note D as “burst light”.</p>
+                        <p><strong>n-back-2 vs Trial 3:</strong> <span class="nomatch">NO MATCH</span> (Trial 3 was South; axis mismatch, not an allowed inversion).</p>
+                    </li>
+                    <li>
+                        <p><strong>Trial 6 — Premise:</strong> Z is west of X; Z is south of Y.</p>
+                        <p><strong>Mapping:</strong> Same structure as Trial 2; reuse without re-anchoring.</p>
+                        <p><strong>n-back-2 vs Trial 4:</strong> <span class="match">MATCH</span> (inverse pair of atoms holds).</p>
+                    </li>
+                    <li>
+                        <p><strong>Trial 7 — Premise:</strong> J is west of D.</p>
+                        <p><strong>Mapping:</strong> Reuse J, D; West: Candle as counter to Fireworks (steady vs fleeting).</p>
+                        <p><strong>n-back-2 vs Trial 5:</strong> <span class="match">MATCH</span> (D east of J ↔ J west of D).</p>
+                    </li>
+                    <li>
+                        <p><strong>Trial 8 — Premise:</strong> X is east of Z.</p>
+                        <p><strong>Mapping:</strong> Reuse X, Z; East: Observation as sibling to Anomaly.</p>
+                        <p><strong>n-back-2 vs Trial 6:</strong> <span class="nomatch">NO MATCH</span> (parity mismatch: k=1 vs k=2).</p>
+                    </li>
+                    <li>
+                        <p><strong>Trial 9 — Premise:</strong> D is east of J.</p>
+                        <p><strong>Mapping:</strong> Reuse D, J; analogue relation sustained.</p>
+                        <p><strong>n-back-2 vs Trial 7:</strong> <span class="match">MATCH</span> (inverse of Trial 7).</p>
+                    </li>
+                    <li>
+                        <p><strong>Trial 10 — Premise:</strong> Z is west of X.</p>
+                        <p><strong>Mapping:</strong> Reuse Z, X; West: Anomaly as foil to Observation.</p>
+                        <p><strong>n-back-2 vs Trial 8:</strong> <span class="match">MATCH</span> (inverse of Trial 8).</p>
+                    </li>
+                </ol>
+
+                <h4>When the same letter returns: do this</h4>
+                <ul class="returns">
+                    <li><strong>Reuse</strong> the original concept; don’t re-anchor.</li>
+                    <li><strong>Check</strong> the new relation versus that concept (N up, S down, E analogue, W opposite).</li>
+                    <li>If a letter must satisfy two relations, use a <em>compound nuance</em> (“chaotic example”, “burst light”) while keeping identity.</li>
+                    <li><strong>Reframe</strong> only if the old choice breaks consistency across trials; if you reframe, note it.</li>
+                    <li><strong>Infer context across letters:</strong> if K is north of J and P is above K, then P sits above J as well (transitively in your mental map). Keep your analogies coherent with such inferences while remembering the game’s logical engine remains the final judge of matches.</li>
+                </ul>
+
+                <p class="closing"><strong>Mantra:</strong> Anchor → Transform → Cohere → Commit → Recall → Update.</p>
+
+                <div class="actions">
+                    <button id="walkthroughN2Speak">Read this walkthrough aloud</button>
+                    <button id="walkthroughN2Copy">Copy walkthrough text</button>
+                </div>
+            </div>
+            `;
+
+            mount.innerHTML = html;
+
+            const speakBtn = mount.querySelector('#walkthroughN2Speak');
+            const copyBtn = mount.querySelector('#walkthroughN2Copy');
+
+            if (speakBtn) {
+                speakBtn.addEventListener('click', () => {
+                    if (typeof speakOnce === 'function') {
+                        speakOnce(walkthroughN2SpeechText());
+                    }
+                });
+            }
+
+            if (copyBtn) {
+                copyBtn.addEventListener('click', async () => {
+                    const source = mount.querySelector('#walkthroughN2');
+                    if (!source) return;
+                    const text = source.innerText.trim();
+                    try {
+                        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                            await navigator.clipboard.writeText(text);
+                        } else {
+                            window.prompt('Copy this walkthrough text:', text);
+                        }
+                    } catch (err) {
+                        console.warn('Clipboard write failed', err);
+                        window.prompt('Copy this walkthrough text:', text);
+                    }
+                });
+            }
+        }
+
+        (function registerWalkthroughN2Tab() {
+            const tabs = document.getElementById('instTabs');
+            if (!tabs) return;
+            if (tabs.querySelector('button[data-tab="walkthrough-n2-10"]')) {
+                return;
+            }
+            const btn = document.createElement('button');
+            btn.textContent = 'n-Back-2: 10-Trial Walkthrough';
+            btn.setAttribute('data-tab', 'walkthrough-n2-10');
+            tabs.appendChild(btn);
+        })();
 
         async function speakOnce(text) {
             if (!text) return;
@@ -4010,8 +4220,9 @@
                 this.nav.setAttribute('role', 'tablist');
                 this.tabButtons.forEach(btn => {
                     btn.setAttribute('role', 'tab');
-                    btn.setAttribute('aria-selected', btn.classList.contains('active') ? 'true' : 'false');
-                    btn.setAttribute('tabindex', btn.classList.contains('active') ? '0' : '-1');
+                    const isActive = this.sections[this.currentIndex] && this.sections[this.currentIndex].id === btn.dataset.tab;
+                    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+                    btn.setAttribute('tabindex', isActive ? '0' : '-1');
                 });
                 this.sandbox = {
                     premise: null,
@@ -4071,7 +4282,10 @@
                 this.openButton.addEventListener('click', () => this.openDialog());
                 this.closeButton.addEventListener('click', () => this.closeDialog());
 
-                this.tabButtons.forEach((button, index) => {
+                this.tabButtons.forEach((button) => {
+                    const sectionId = button.dataset.tab;
+                    const index = this.sections.findIndex(section => section.id === sectionId);
+                    if (index === -1) return;
                     button.addEventListener('click', () => {
                         this.currentIndex = index;
                         this.renderCurrentSection();
@@ -4209,18 +4423,23 @@
             renderCurrentSection() {
                 const section = this.sections[this.currentIndex];
                 if (!section) return;
-                this.tabButtons.forEach((button, idx) => {
-                    const isActive = idx === this.currentIndex;
+                this.tabButtons.forEach((button) => {
+                    const isActive = button.dataset.tab === section.id;
                     button.classList.toggle('active', isActive);
-                    if (this.visited.has(this.sections[idx].id)) {
+                    if (this.visited.has(button.dataset.tab)) {
                         button.classList.add('visited');
                     }
                     button.setAttribute('aria-selected', isActive ? 'true' : 'false');
                     button.setAttribute('tabindex', isActive ? '0' : '-1');
                 });
-                this.content.innerHTML = section.html;
-                if (section.id === 'examples') {
-                    renderGuidedExamples();
+                if (typeof section.render === 'function') {
+                    this.content.innerHTML = '';
+                    section.render(this.content);
+                } else {
+                    this.content.innerHTML = section.html;
+                    if (section.id === 'examples') {
+                        renderGuidedExamples();
+                    }
                 }
                 this.content.scrollTop = 0;
                 localStorage.setItem('instSection', section.id);
