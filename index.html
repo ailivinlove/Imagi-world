@@ -339,6 +339,12 @@
             gap: 10px;
         }
 
+        .inline {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
         .checkbox-group input[type="checkbox"] {
             width: 20px;
             height: 20px;
@@ -750,6 +756,16 @@
                 <label for="debug-toggle" style="margin-bottom: 0;">Show Debug Panel</label>
             </div>
 
+            <div class="control-group">
+                <label class="inline" title="Let the session play without responses">
+                    <input id="listenOnlyToggle" type="checkbox" />
+                    Listen-Only (Auto-Advance)
+                </label>
+                <small id="listenOnlyHint" aria-live="polite" hidden>
+                    Listening mode: scoring disabled; session will auto-advance to completion.
+                </small>
+            </div>
+
             <div style="margin-top: 20px;">
                 <div class="button-group">
                     <button id="start-btn" class="success">Start</button>
@@ -871,9 +887,41 @@
         };
 
         const NUM_TRIALS_KEY = 'numTrials';
+        const LISTEN_ONLY_KEY = 'listenOnly';
         const numTrialsInput = document.getElementById('numTrialsInput');
         const numTrialsSlider = document.getElementById('numTrialsSlider');
         const numTrialsDisplay = document.getElementById('numTrialsDisplay');
+        const listenOnlyToggle = document.getElementById('listenOnlyToggle');
+        const listenOnlyHint = document.getElementById('listenOnlyHint');
+
+        function loadListenOnly() {
+            try {
+                return localStorage.getItem(LISTEN_ONLY_KEY) === '1';
+            } catch (err) {
+                console.warn('Failed to load listen-only preference', err);
+                return false;
+            }
+        }
+
+        function persistListenOnly(on) {
+            try {
+                localStorage.setItem(LISTEN_ONLY_KEY, on ? '1' : '0');
+            } catch (err) {
+                console.warn('Failed to persist listen-only preference', err);
+            }
+            if (listenOnlyHint) {
+                listenOnlyHint.hidden = !on;
+            }
+        }
+
+        if (listenOnlyToggle) {
+            const initListenOnly = loadListenOnly();
+            listenOnlyToggle.checked = initListenOnly;
+            persistListenOnly(initListenOnly);
+            listenOnlyToggle.addEventListener('change', () => {
+                persistListenOnly(listenOnlyToggle.checked);
+            });
+        }
 
         const TUTORIAL_SECTIONS = [
             {
@@ -1525,7 +1573,7 @@
             if (typeof engine.voice.cancelAndWait === 'function') {
                 await engine.voice.cancelAndWait();
             }
-            engine.voice.speak(text, engine.sessionToken);
+            engine.voice.speak(text, engine.voice.sessionToken);
         }
 
         const SANDBOX_TRANSFORMS = {
@@ -1546,6 +1594,88 @@
                 reverse: (value) => `Opposite(${value})`
             }
         };
+
+        const AdvancePolicy = Object.freeze({ ACTIVE: 'active', LISTEN: 'listen' });
+        let session = null;
+
+        function makeEpoch() {
+            const cryptoSource = (typeof crypto !== 'undefined' && crypto?.getRandomValues)
+                ? crypto.getRandomValues(new Uint32Array(1))[0]
+                : Date.now();
+            const random = Math.floor(Math.random() * 1e9);
+            return (cryptoSource ^ random) >>> 0;
+        }
+
+        function newSession(engine) {
+            return {
+                epoch: makeEpoch(),
+                numTrials: engine.applyNumTrialsFromUI(),
+                trialIndex: 0,
+                policy: loadListenOnly() ? AdvancePolicy.LISTEN : AdvancePolicy.ACTIVE,
+                abort: new AbortController(),
+                trialToken: 0,
+                phaseToken: 0,
+                omissions: 0
+            };
+        }
+
+        function valid(sess, trialToken, phaseToken) {
+            return Boolean(
+                session &&
+                sess &&
+                sess.epoch === session.epoch &&
+                trialToken === session.trialToken &&
+                (!phaseToken || phaseToken === session.phaseToken) &&
+                !sess.abort.signal.aborted
+            );
+        }
+
+        const Timer = (() => {
+            let id = 0;
+            const live = new Map();
+
+            function clear(timerId) {
+                const entry = live.get(timerId);
+                if (!entry) return;
+                clearTimeout(entry.handle);
+                live.delete(timerId);
+            }
+
+            function set(label, ms, trialToken, signal, cb) {
+                const timerId = ++id;
+                const handle = setTimeout(() => {
+                    if (!valid(session, trialToken)) {
+                        clear(timerId);
+                        return;
+                    }
+                    live.delete(timerId);
+                    cb?.();
+                }, ms);
+                live.set(timerId, { handle, label, trialToken, started: performance.now() });
+                if (signal) {
+                    signal.addEventListener('abort', () => clear(timerId), { once: true });
+                }
+                return timerId;
+            }
+
+            function cancelAll() {
+                for (const entry of live.values()) {
+                    clearTimeout(entry.handle);
+                }
+                live.clear();
+            }
+
+            return { set, clear, cancelAll, live };
+        })();
+
+        let heartbeat = null;
+
+        function clearHeartbeat() {
+            if (heartbeat) {
+                clearInterval(heartbeat);
+                heartbeat = null;
+            }
+        }
 
         function loadNumTrials() {
             const v = parseInt(localStorage.getItem(NUM_TRIALS_KEY) || '20', 10);
@@ -3532,16 +3662,14 @@
                 this.pitch = 1.2;
                 this.rate = 0.9;
                 this.volume = 1.0;
-                this.queue = [];
-                this.isSpeaking = false;
-                this.sessionToken = 0;
+                this.sessionToken = makeEpoch();
             }
 
             async initialize() {
                 await new Promise(resolve => {
                     const attempt = () => {
                         const voices = this.synth.getVoices();
-                        if (voices.length === 0) {
+                        if (!voices || voices.length === 0) {
                             setTimeout(attempt, 200);
                             return;
                         }
@@ -3592,50 +3720,116 @@
                 return this.voice ? `${this.voice.name} (${this.voice.lang})` : 'Voice not initialized';
             }
 
-            speak(text, sessionToken) {
-                return new Promise(resolve => {
-                    this.queue.push({ text, resolve, sessionToken });
-                    this.processQueue();
-                });
-            }
-
-            async processQueue() {
-                if (this.isSpeaking) return;
-                const item = this.queue.shift();
-                if (!item) return;
-
-                this.isSpeaking = true;
-                const utterance = new SpeechSynthesisUtterance(item.text);
-                utterance.voice = this.voice;
-                utterance.pitch = this.pitch;
-                utterance.rate = this.rate;
-                utterance.volume = this.volume;
-
-                utterance.onend = () => {
-                    this.isSpeaking = false;
-                    item.resolve();
-                    this.processQueue();
-                };
-
-                this.synth.speak(utterance);
-            }
-
-            async speakPremise(premise, sessionToken) {
-                if (!premise) return;
-                const text = premise.toNaturalSpeech();
-                return this.speak(text, sessionToken);
+            getLockedVoice() {
+                return this.voice;
             }
 
             async cancelAndWait() {
-                this.synth.cancel();
-                this.isSpeaking = false;
+                try {
+                    this.synth.cancel();
+                } catch (error) {
+                    console.warn('speechSynthesis.cancel failed', error);
+                }
                 await new Promise(resolve => setTimeout(resolve, 50));
+                this.sessionToken = makeEpoch();
+            }
+
+            speak(text, guardToken = null) {
+                if (!text) {
+                    return Promise.resolve({ fallback: false, attempts: 0 });
+                }
+
+                return new Promise(resolve => {
+                    let attempt = 0;
+                    const maxAttempts = 2;
+                    const speakAttempt = () => {
+                        if (guardToken && guardToken !== this.sessionToken) {
+                            resolve({ fallback: attempt > 1, attempts: attempt });
+                            return;
+                        }
+
+                        attempt += 1;
+                        const utterance = new SpeechSynthesisUtterance(text);
+                        const voice = this.getLockedVoice();
+                        if (voice) {
+                            utterance.voice = voice;
+                            utterance.lang = voice.lang;
+                        }
+                        utterance.pitch = this.pitch;
+                        utterance.rate = this.rate;
+                        utterance.volume = this.volume;
+
+                        let settled = false;
+                        let fallbackTimer = null;
+
+                        const cleanup = () => {
+                            if (fallbackTimer) {
+                                clearTimeout(fallbackTimer);
+                                fallbackTimer = null;
+                            }
+                        };
+
+                        const finish = () => {
+                            if (settled) return;
+                            settled = true;
+                            cleanup();
+                            resolve({ fallback: attempt > 1, attempts: attempt });
+                        };
+
+                        const retry = () => {
+                            if (settled) return;
+                            cleanup();
+                            if (attempt >= maxAttempts) {
+                                settled = true;
+                                resolve({ fallback: attempt > 1, attempts: attempt });
+                                return;
+                            }
+                            try {
+                                this.synth.cancel();
+                            } catch (err) {
+                                console.warn('speechSynthesis.cancel retry failed', err);
+                            }
+                            setTimeout(() => speakAttempt(), 120);
+                        };
+
+                        const estimate = estimateUtteranceMs(text, this.rate) + 400;
+                        fallbackTimer = setTimeout(() => retry(), estimate);
+
+                        utterance.onend = () => finish();
+                        utterance.onerror = () => retry();
+
+                        setTimeout(() => {
+                            if (settled) return;
+                            try {
+                                this.synth.resume();
+                            } catch (err) {
+                                console.warn('speechSynthesis.resume failed', err);
+                            }
+                            try {
+                                this.synth.speak(utterance);
+                            } catch (err) {
+                                console.warn('speechSynthesis.speak failed', err);
+                                retry();
+                            }
+                        }, 120);
+                    };
+
+                    speakAttempt();
+                });
+            }
+
+            async speakPremise(premise, guardToken = null) {
+                if (!premise) {
+                    return { fallback: false, attempts: 0 };
+                }
+                const text = formatPremiseForSpeech(premise);
+                return this.speak(text, guardToken);
             }
         }
-
         class GameEngine {
             constructor() {
                 this.session = sessionDefaults();
+                this.session.state = 'STOPPED';
                 this.seedManager = new SeedManager();
                 this.logger = new GameLogger();
                 this.voice = new VoiceSynthesis();
@@ -3646,10 +3840,7 @@
                 this.planner = null;
                 this.matchSchedule = [];
                 this.awaitingResponse = false;
-                this.sessionToken = 0;
-                this.responseResolver = null;
-                this.responseTimer = null;
-                this.pendingTrialHandle = null;
+                this.sessionToken = makeEpoch();
                 this.responseStartTime = 0;
                 this.currentPremises = [];
                 this.score = 0;
@@ -3663,6 +3854,9 @@
                 this.pendingPlannerFlip = false;
                 this.pendingRestart = false;
                 this.statusMessage = 'Idle';
+                this.policy = AdvancePolicy.ACTIVE;
+                this.lastSpokenFallback = false;
+                this.activePremise = null;
             }
 
             get n() {
@@ -3703,106 +3897,18 @@
                 return current;
             }
 
-            clearAllTimers() {
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                if (this.pendingTrialHandle) {
-                    clearTimeout(this.pendingTrialHandle);
-                    this.pendingTrialHandle = null;
-                }
-            }
-
             speakOnce(text) {
                 if (!text) return;
-                this.voice.speak(text, this.sessionToken);
+                this.voice.speak(text, this.voice.sessionToken);
             }
 
             renderSummary() {
                 this.statusMessage = `Session complete. ${this.session.numTrials} trials finished.`;
-                document.getElementById('feedback').textContent = '';
-            }
-
-            scheduleNextTrial() {
-                if (this.session.state !== 'RUNNING') return;
-                if (this.pendingTrialHandle) {
-                    clearTimeout(this.pendingTrialHandle);
-                    this.pendingTrialHandle = null;
+                const feedbackEl = document.getElementById('feedback');
+                if (feedbackEl) {
+                    feedbackEl.textContent = '';
+                    feedbackEl.className = 'feedback';
                 }
-                if (this.session.trialIndex >= this.session.numTrials) {
-                    this.endSession();
-                    return;
-                }
-
-                const token = this.sessionToken;
-                this.pendingTrialHandle = setTimeout(async () => {
-                    this.pendingTrialHandle = null;
-                    if (token !== this.sessionToken || this.session.state !== 'RUNNING') {
-                        return;
-                    }
-                    try {
-                        await this.runTrial(token);
-                        if (token === this.sessionToken) {
-                            this.onTrialFinished();
-                        }
-                    } catch (error) {
-                        console.error('Trial execution failed', error);
-                        await this.stopSession(false);
-                    }
-                }, 0);
-            }
-
-            onTrialFinished() {
-                if (this.session.state !== 'RUNNING') return;
-                this.session.trialIndex += 1;
-                this.updateUI();
-                if (this.session.trialIndex >= this.session.numTrials) {
-                    this.endSession();
-                } else {
-                    this.scheduleNextTrial();
-                }
-            }
-
-            async stopSession(skipSummary = false) {
-                const wasRunning = this.session.state === 'RUNNING' || this.session.state === 'PAUSED';
-                this.session.state = 'STOPPED';
-                this.sessionToken += 1;
-                this.clearAllTimers();
-                await this.voice.cancelAndWait();
-                this.awaitingResponse = false;
-                if (this.responseResolver) {
-                    this.responseResolver(null);
-                    this.responseResolver = null;
-                }
-                if (!skipSummary && wasRunning) {
-                    this.statusMessage = 'Stopped';
-                }
-                this.updateUI();
-            }
-
-            async endSession() {
-                this.session.state = 'STOPPED';
-                this.clearAllTimers();
-                if (window.speechSynthesis && typeof window.speechSynthesis.cancel === 'function') {
-                    window.speechSynthesis.cancel();
-                }
-                await this.voice.cancelAndWait();
-                this.awaitingResponse = false;
-                if (this.responseResolver) {
-                    this.responseResolver(null);
-                    this.responseResolver = null;
-                }
-                const totalTrials = this.session.numTrials;
-                this.speakOnce(`Session complete. ${totalTrials} trials finished.`);
-                this.renderSummary();
-                this.updateUI();
-            }
-
-            async restartSession() {
-                this.pendingRestart = true;
-                await this.stopSession(true);
-                this.startSession();
             }
 
             async initialize() {
@@ -3813,136 +3919,224 @@
             }
 
             attachUI() {
-                document.getElementById('lock-seed-toggle').checked = this.lockSeed;
-                document.getElementById('lock-seed-toggle').addEventListener('change', (e) => {
-                    this.lockSeed = e.target.checked;
-                    this.seedManager.setLockPreference(this.lockSeed);
-                });
+                const lockSeedToggle = document.getElementById('lock-seed-toggle');
+                if (lockSeedToggle) {
+                    lockSeedToggle.checked = this.lockSeed;
+                    lockSeedToggle.addEventListener('change', (e) => {
+                        this.lockSeed = e.target.checked;
+                        this.seedManager.setLockPreference(this.lockSeed);
+                    });
+                }
 
-                document.getElementById('reset-seed-toggle').addEventListener('change', (e) => {
-                    this.resetOnRestart = e.target.checked;
-                });
+                const resetSeedToggle = document.getElementById('reset-seed-toggle');
+                if (resetSeedToggle) {
+                    resetSeedToggle.addEventListener('change', (e) => {
+                        this.resetOnRestart = e.target.checked;
+                    });
+                }
 
-                document.getElementById('transitivity-toggle').addEventListener('change', (e) => {
-                    this.equivalence.setTransitivity(e.target.checked);
-                });
+                const transitivityToggle = document.getElementById('transitivity-toggle');
+                if (transitivityToggle) {
+                    transitivityToggle.addEventListener('change', (e) => {
+                        this.equivalence.setTransitivity(e.target.checked);
+                    });
+                }
 
-                document.getElementById('debug-toggle').addEventListener('change', (e) => {
-                    document.getElementById('debug').hidden = !e.target.checked;
-                });
+                const debugToggle = document.getElementById('debug-toggle');
+                if (debugToggle) {
+                    debugToggle.addEventListener('change', (e) => {
+                        document.getElementById('debug').hidden = !e.target.checked;
+                    });
+                }
 
                 const sptSlider = document.getElementById('spt-slider');
                 const sptNumber = document.getElementById('spt-number');
                 const syncSeconds = (value) => {
                     this.secondsPerTrial = parseFloat(value);
-                    document.getElementById('spt-value').textContent = this.secondsPerTrial.toFixed(1);
+                    const sptValue = document.getElementById('spt-value');
+                    if (sptValue) {
+                        sptValue.textContent = this.secondsPerTrial.toFixed(1);
+                    }
                 };
-                sptSlider.addEventListener('input', (e) => {
-                    sptNumber.value = e.target.value;
-                    syncSeconds(e.target.value);
-                });
-                sptNumber.addEventListener('input', (e) => {
-                    sptSlider.value = e.target.value;
-                    syncSeconds(e.target.value);
-                });
+                if (sptSlider) {
+                    sptSlider.addEventListener('input', (e) => {
+                        if (sptNumber) {
+                            sptNumber.value = e.target.value;
+                        }
+                        syncSeconds(e.target.value);
+                    });
+                }
+                if (sptNumber) {
+                    sptNumber.addEventListener('input', (e) => {
+                        if (sptSlider) {
+                            sptSlider.value = e.target.value;
+                        }
+                        syncSeconds(e.target.value);
+                    });
+                }
 
-                document.getElementById('n-slider').addEventListener('input', (e) => {
-                    this.n = parseInt(e.target.value, 10);
-                    document.getElementById('n-value').textContent = this.n;
-                });
+                const nSlider = document.getElementById('n-slider');
+                if (nSlider) {
+                    nSlider.addEventListener('input', (e) => {
+                        this.n = parseInt(e.target.value, 10);
+                        const nValue = document.getElementById('n-value');
+                        if (nValue) {
+                            nValue.textContent = this.n;
+                        }
+                    });
+                }
 
-                document.getElementById('k-slider').addEventListener('input', (e) => {
-                    this.k = parseInt(e.target.value, 10);
-                    document.getElementById('k-value').textContent = this.k;
-                });
+                const kSlider = document.getElementById('k-slider');
+                if (kSlider) {
+                    kSlider.addEventListener('input', (e) => {
+                        this.k = parseInt(e.target.value, 10);
+                        const kValue = document.getElementById('k-value');
+                        if (kValue) {
+                            kValue.textContent = this.k;
+                        }
+                    });
+                }
 
-                document.getElementById('start-btn').addEventListener('click', () => {
-                    this.pendingRestart = false;
-                    this.startSession();
-                });
-                document.getElementById('restart-btn').addEventListener('click', () => {
-                    this.restartSession();
-                });
-                document.getElementById('stop-btn').addEventListener('click', () => {
-                    this.stopSession(false);
-                });
-                document.getElementById('match-btn').addEventListener('click', () => this.handleResponse(true));
-                document.getElementById('no-match-btn').addEventListener('click', () => this.handleResponse(false));
-                document.getElementById('repeat-btn').addEventListener('click', () => this.handleRepeat());
+                const startBtn = document.getElementById('start-btn');
+                if (startBtn) {
+                    startBtn.addEventListener('click', () => {
+                        this.pendingRestart = false;
+                        startSession();
+                    });
+                }
 
-                document.getElementById('preview-btn').addEventListener('click', async () => {
-                    const previewPremise = new Premise([
-                        new Atom('N', 'A', 'B'),
-                        new Atom('E', 'C', 'D')
-                    ]);
-                    await this.voice.speakPremise(previewPremise, 0);
-                });
+                const restartBtn = document.getElementById('restart-btn');
+                if (restartBtn) {
+                    restartBtn.addEventListener('click', () => {
+                        restartSession();
+                    });
+                }
+
+                const stopBtn = document.getElementById('stop-btn');
+                if (stopBtn) {
+                    stopBtn.addEventListener('click', () => {
+                        stopSession();
+                    });
+                }
+
+                const repeatBtn = document.getElementById('repeat-btn');
+                if (repeatBtn) {
+                    repeatBtn.addEventListener('click', () => {
+                        onRepeatPressed();
+                    });
+                }
+
+                const previewBtn = document.getElementById('preview-btn');
+                if (previewBtn) {
+                    previewBtn.addEventListener('click', async () => {
+                        const previewPremise = new Premise([
+                            new Atom('N', 'A', 'B'),
+                            new Atom('E', 'C', 'D')
+                        ]);
+                        await this.voice.speakPremise(previewPremise, this.voice.sessionToken);
+                    });
+                }
 
                 document.addEventListener('keydown', (e) => {
-                    if (!this.awaitingResponse) return;
-                    if (e.code === 'Space') {
-                        e.preventDefault();
-                        this.handleResponse(true);
-                    } else if (e.code === 'Enter') {
-                        e.preventDefault();
-                        this.handleResponse(false);
+                    if (e.code === 'Space' || e.code === 'Enter') {
+                        const handler = window.__imagiActiveResponse;
+                        if (typeof handler === 'function') {
+                            e.preventDefault();
+                            handler(e.code === 'Space' ? 'match' : 'nomatch');
+                        }
                     }
                 });
 
-                document.getElementById('export-btn').addEventListener('click', () => {
-                    this.exportData();
-                });
+                const exportBtn = document.getElementById('export-btn');
+                if (exportBtn) {
+                    exportBtn.addEventListener('click', () => {
+                        this.exportData();
+                    });
+                }
 
-                document.getElementById('test-btn').addEventListener('click', async () => {
-                    const panel = document.getElementById('test-panel');
-                    const resultsEl = document.getElementById('test-results');
-                    panel.hidden = false;
-                    resultsEl.innerHTML = '<p>Running tests...</p>';
-                    const harness = new TestHarness();
-                    const results = await harness.runAll();
-                    resultsEl.innerHTML = results.map(result => {
-                        const cls = result.passed ? 'pass' : 'fail';
-                        const symbol = result.passed ? '✓' : '✗';
-                        return `<div class="test-result ${cls}">${symbol} ${result.test}: ${result.details}</div>`;
-                    }).join('');
-                });
+                const testBtn = document.getElementById('test-btn');
+                if (testBtn) {
+                    testBtn.addEventListener('click', async () => {
+                        const panel = document.getElementById('test-panel');
+                        const resultsEl = document.getElementById('test-results');
+                        if (panel) panel.hidden = false;
+                        if (resultsEl) {
+                            resultsEl.innerHTML = '<p>Running tests...</p>';
+                            const harness = new TestHarness();
+                            const results = await harness.runAll();
+                            resultsEl.innerHTML = results.map(result => {
+                                const cls = result.passed ? 'pass' : 'fail';
+                                const symbol = result.passed ? '✓' : '✗';
+                                return `<div class="test-result ${cls}">${symbol} ${result.test}: ${result.details}</div>`;
+                            }).join('');
+                        }
+                    });
+                }
             }
 
             updateVoiceInfo() {
-                document.getElementById('voice-info').innerHTML = `<strong>Voice:</strong> ${this.voice.getVoiceInfo()}`;
+                const info = document.getElementById('voice-info');
+                if (info) {
+                    info.innerHTML = `<strong>Voice:</strong> ${this.voice.getVoiceInfo()}`;
+                }
             }
 
             updateUI() {
-                document.getElementById('trial-count').textContent = this.session.trialIndex;
-                document.getElementById('score').textContent = this.score;
-                document.getElementById('omissions').textContent = this.omissions;
+                const trialCount = document.getElementById('trial-count');
+                if (trialCount) {
+                    trialCount.textContent = this.session.trialIndex;
+                }
+                const scoreEl = document.getElementById('score');
+                if (scoreEl) {
+                    scoreEl.textContent = this.score;
+                }
+                const omissionsEl = document.getElementById('omissions');
+                if (omissionsEl) {
+                    omissionsEl.textContent = this.omissions;
+                }
+                const accuracyEl = document.getElementById('accuracy');
                 const accuracy = this.totalResponses > 0 ? (this.correctResponses / this.totalResponses) * 100 : null;
-                document.getElementById('accuracy').textContent = accuracy !== null ? `${accuracy.toFixed(1)}%` : '-';
+                if (accuracyEl) {
+                    accuracyEl.textContent = accuracy !== null ? `${accuracy.toFixed(1)}%` : '-';
+                }
+                const rollingEl = document.getElementById('rolling-acc');
                 const rolling = this.recentAccuracy.length > 0
                     ? (this.recentAccuracy.reduce((a, b) => a + b, 0) / this.recentAccuracy.length) * 100
                     : null;
-                document.getElementById('rolling-acc').textContent = rolling !== null ? `${rolling.toFixed(1)}%` : '-';
+                if (rollingEl) {
+                    rollingEl.textContent = rolling !== null ? `${rolling.toFixed(1)}%` : '-';
+                }
 
                 const running = this.session.state === 'RUNNING';
                 const statusText = running ? `Running (n=${this.n}, k=${this.k})` : this.statusMessage;
-                document.getElementById('status').textContent = statusText;
+                const statusEl = document.getElementById('status');
+                if (statusEl) {
+                    statusEl.textContent = statusText;
+                }
 
-                document.getElementById('start-btn').disabled = running;
-                document.getElementById('restart-btn').disabled = !running;
-                document.getElementById('stop-btn').disabled = !running;
+                const startBtn = document.getElementById('start-btn');
+                if (startBtn) startBtn.disabled = running;
+                const restartBtn = document.getElementById('restart-btn');
+                if (restartBtn) restartBtn.disabled = !running;
+                const stopBtn = document.getElementById('stop-btn');
+                if (stopBtn) stopBtn.disabled = !running;
             }
 
-            startSession() {
-                if (this.session.state === 'RUNNING') return;
+            prepareSession(sess) {
+                const totalPlanned = sess.numTrials;
                 this.session = sessionDefaults();
-                const totalPlanned = this.applyNumTrialsFromUI();
                 this.session.trialIndex = 0;
+                this.session.numTrials = totalPlanned;
+                this.session.state = 'RUNNING';
+                this.policy = sess.policy;
                 this.score = 0;
                 this.correctResponses = 0;
                 this.totalResponses = 0;
                 this.omissions = 0;
                 this.recentAccuracy = [];
                 this.pendingPlannerFlip = false;
+                this.awaitingResponse = false;
+                this.lastSpokenFallback = false;
 
                 const shouldResetLogs = !this.pendingRestart || this.resetOnRestart;
                 this.pendingRestart = false;
@@ -3961,141 +4155,279 @@
                 }
                 this.currentPremises = [];
                 this.statusMessage = `Running (n=${this.n}, k=${this.k})`;
-                this.session.state = 'RUNNING';
-                this.sessionToken += 1;
+                this.sessionToken = makeEpoch();
+
+                const premiseDisplay = document.getElementById('premise-display');
+                if (premiseDisplay) {
+                    premiseDisplay.textContent = '';
+                }
+                const feedbackEl = document.getElementById('feedback');
+                if (feedbackEl) {
+                    feedbackEl.textContent = '';
+                    feedbackEl.className = 'feedback';
+                }
+                const repeatBtn = document.getElementById('repeat-btn');
+                if (repeatBtn) repeatBtn.disabled = true;
+                const matchBtn = document.getElementById('match-btn');
+                if (matchBtn) matchBtn.disabled = true;
+                const noMatchBtn = document.getElementById('no-match-btn');
+                if (noMatchBtn) noMatchBtn.disabled = true;
+                window.__imagiActiveResponse = null;
+                window.forceCurrentTrialTimeout = null;
+                window.currentPremiseText = '';
 
                 this.updateUI();
-                this.scheduleNextTrial();
             }
 
-            async runTrial(sessionToken) {
-                if (this.session.state !== 'RUNNING' || sessionToken !== this.sessionToken) return;
+            async finalizeSession(sess, aborted) {
+                this.awaitingResponse = false;
+                this.session.state = 'STOPPED';
+                this.statusMessage = aborted ? 'Stopped' : `Session complete. ${this.session.numTrials} trials finished.`;
+                if (!aborted) {
+                    this.renderSummary();
+                }
+                this.activePremise = null;
+                this.updateUI();
+            }
 
-                const currentIndex = this.session.trialIndex;
-                const scheduledMatch = this.matchSchedule[currentIndex] || false;
-                const nBackIndex = currentIndex - this.n;
+            planTrial(trialIndex) {
+                const scheduledMatch = this.matchSchedule[trialIndex] || false;
+                const nBackIndex = trialIndex - this.n;
                 const nBackPremise = nBackIndex >= 0 ? this.currentPremises[nBackIndex] : null;
-                const middleAtoms = nBackIndex >= 0 ? this.state.getConstraintsInRange(nBackIndex + 1, currentIndex - 1) : [];
-                const cooldown = this.state.getActiveCooldown(currentIndex);
+                const middleAtoms = nBackIndex >= 0 ? this.state.getConstraintsInRange(nBackIndex + 1, trialIndex - 1) : [];
+                const cooldown = this.state.getActiveCooldown(trialIndex);
+                const planMatch = scheduledMatch && Boolean(nBackPremise);
+                const foilPlan = (!planMatch && nBackPremise) ? this.planner.maybePlanFoil() : null;
+                return { trialIndex, scheduledMatch, nBackPremise, middleAtoms, cooldown, planMatch, foilPlan };
+            }
 
-                let planMatch = scheduledMatch && Boolean(nBackPremise);
-                let foilPlan = (!planMatch && nBackPremise) ? this.planner.maybePlanFoil() : null;
-
-                let result = this.generator.generate({
-                    trialIndex: currentIndex,
+            tryGenerate(plan, override = null) {
+                const params = {
+                    trialIndex: plan.trialIndex,
                     k: this.k,
                     n: this.n,
-                    plannedMatch: planMatch,
-                    nBackPremise,
-                    middleAtoms,
-                    avoidLetters: planMatch ? cooldown : null,
+                    plannedMatch: override !== null ? override : plan.planMatch,
+                    nBackPremise: plan.nBackPremise,
+                    middleAtoms: plan.middleAtoms,
+                    avoidLetters: (override !== null ? override : plan.planMatch) ? plan.cooldown : null,
                     allowOverride: true,
-                    foilPlan
-                });
+                    foilPlan: plan.foilPlan
+                };
+                return this.generator.generate(params);
+            }
 
-                let plannerFlip = false;
-
-                if (!result && scheduledMatch) {
-                    this.planner.forceFlip(currentIndex);
-                    plannerFlip = true;
-                    planMatch = false;
-                    foilPlan = nBackPremise ? this.planner.maybePlanFoil() : null;
-                    result = this.generator.generate({
-                        trialIndex: currentIndex,
-                        k: this.k,
-                        n: this.n,
-                        plannedMatch: false,
-                        nBackPremise,
-                        middleAtoms,
-                        avoidLetters: null,
-                        allowOverride: true,
-                        foilPlan
-                    });
+            async generatePremiseGuaranteed(plan) {
+                for (let attempt = 0; attempt < 30; attempt++) {
+                    const result = this.tryGenerate(plan, null);
+                    if (result) {
+                        return { ...result, planMatch: plan.planMatch };
+                    }
+                    if (plan.scheduledMatch && attempt === 0) {
+                        this.planner.forceFlip(plan.trialIndex);
+                        this.pendingPlannerFlip = true;
+                        const flipped = this.tryGenerate(plan, false);
+                        if (flipped) {
+                            return { ...flipped, planMatch: false };
+                        }
+                    }
                 }
 
+                if (!plan._flipped && plan.nBackPremise) {
+                    const flippedPlan = { ...plan, planMatch: !plan.planMatch, scheduledMatch: false, _flipped: true };
+                    for (let attempt = 0; attempt < 30; attempt++) {
+                        const result = this.tryGenerate(flippedPlan, flippedPlan.planMatch);
+                        if (result) {
+                            return { ...result, planMatch: flippedPlan.planMatch };
+                        }
+                    }
+                }
+
+                return this.buildNeutralNonMatch(plan);
+            }
+
+            buildNeutralNonMatch(plan) {
+                const letters = this.state?.letters || 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+                const head = this.state?.rng ? this.state.rng.choice(letters) : letters[0];
+                const tails = letters.filter(letter => letter !== head);
+                const tail = (this.state?.rng ? this.state.rng.choice(tails.length ? tails : letters) : (tails[0] || letters[1] || head));
+                const axis = this.state?.rng ? this.state.rng.choice(MATCH_AXES) : 'N';
+                const safeTail = tail === head ? letters[(letters.indexOf(head) + 1) % letters.length] : tail;
+                const premise = new Premise([new Atom(axis, head, safeTail)]);
+                const signatures = this.state ? this.state.novelty.buildSignatures(premise) : { exact: premise.toKey() };
+                const windowAtoms = this.state ? this.state.getWindowAtoms() : [];
+                const satResult = this.solver ? this.solver.evaluate(windowAtoms, premise.atoms) : { ok: true, coordinates: new Map() };
+                return {
+                    premise,
+                    signatures,
+                    novelty: { noveltyScores: {}, blocked: false },
+                    satResult,
+                    certificate: null,
+                    modeUsed: 'fallback',
+                    features: premise.getFeatures(),
+                    foilType: null,
+                    planMatch: false
+                };
+            }
+
+            async executeTrial(sess, trialToken, signal) {
+                if (!valid(sess, trialToken)) return;
+                const currentIndex = sess.trialIndex;
+                this.session.trialIndex = currentIndex;
+                this.updateUI();
+
+                let plan = this.planTrial(currentIndex);
+                let result = await this.generatePremiseGuaranteed(plan);
                 if (!result) {
-                    await this.stopSession(false);
-                    return;
+                    console.warn('Premise generation returned null; using neutral fallback.');
+                    result = this.buildNeutralNonMatch(plan);
                 }
 
-                const { premise, signatures, novelty, satResult, certificate, modeUsed, features, foilType } = result;
-                const planType = planMatch
-                    ? 'match'
-                    : (foilType ? `foil:${foilType}` : 'nonmatch');
+                const { premise, signatures, novelty, satResult, certificate, modeUsed, features, foilType, planMatch } = result;
+                this.activePremise = premise;
+                const planType = planMatch ? 'match' : (foilType ? `foil:${foilType}` : 'nonmatch');
                 const featureSnapshot = features || premise.getFeatures();
+
                 this.currentPremises.push(premise);
                 this.state.recordPremise(premise, premise.atoms, { plannedMatch: planMatch, certificate, modeUsed, foilType });
                 this.state.novelty.register(signatures);
                 this.state.coordinates = satResult.coordinates;
 
-                document.getElementById('premise-display').textContent = premise.toString();
-                await this.voice.speakPremise(premise, sessionToken);
-                if (sessionToken !== this.sessionToken) return;
+                sess.phaseToken = (sess.phaseToken || 0) + 1;
+                const premiseDisplay = document.getElementById('premise-display');
+                if (premiseDisplay) {
+                    premiseDisplay.textContent = premise.toString();
+                }
+                window.currentPremiseText = formatPremiseForSpeech(premise);
+                const matchBtn = document.getElementById('match-btn');
+                const noMatchBtn = document.getElementById('no-match-btn');
+                const repeatBtn = document.getElementById('repeat-btn');
+                if (matchBtn) matchBtn.disabled = true;
+                if (noMatchBtn) noMatchBtn.disabled = true;
+                if (repeatBtn) repeatBtn.disabled = false;
+
+                const speechMeta = await speakPremiseSafe(sess, premise, trialToken, signal);
+                this.lastSpokenFallback = Boolean(speechMeta?.fallback);
+                if (!valid(sess, trialToken)) return;
+
+                if (sess.policy === AdvancePolicy.LISTEN) {
+                    await dwellSafe(this.secondsPerTrial, trialToken, signal);
+                    if (!valid(sess, trialToken)) return;
+                    this.logTrial({
+                        planMatch,
+                        planType,
+                        certificate,
+                        featureSnapshot,
+                        premise,
+                        novelty,
+                        satResult,
+                        foilType,
+                        responsePayload: { choice: null, correct: null, rt: null, omission: false, timeout: false },
+                        modeUsed,
+                        trialIndex: currentIndex,
+                        passiveAdvance: true,
+                        trialTokenAtStart: trialToken,
+                        listenOnly: true
+                    });
+                    if (repeatBtn) repeatBtn.disabled = true;
+                    const feedbackEl = document.getElementById('feedback');
+                    if (feedbackEl) {
+                        feedbackEl.textContent = 'Listening…';
+                        feedbackEl.className = 'feedback';
+                    }
+                    this.session.trialIndex = currentIndex + 1;
+                    this.updateUI();
+                    this.activePremise = null;
+                    return;
+                }
 
                 this.awaitingResponse = true;
                 this.responseStartTime = Date.now();
+                if (matchBtn) matchBtn.disabled = false;
+                if (noMatchBtn) noMatchBtn.disabled = false;
 
-                const response = await new Promise(resolve => {
-                    this.responseResolver = resolve;
-                    document.getElementById('match-btn').disabled = false;
-                    document.getElementById('no-match-btn').disabled = false;
-                    document.getElementById('repeat-btn').disabled = false;
-                    this.responseTimer = setTimeout(() => {
-                        if (this.responseResolver) {
-                            this.responseResolver(null);
-                            this.responseResolver = null;
-                        }
-                    }, this.secondsPerTrial * 1000);
-                });
-
-                if (sessionToken !== this.sessionToken) return;
-
+                const response = await collectResponseSafe(this.secondsPerTrial, trialToken, signal);
                 this.awaitingResponse = false;
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                document.getElementById('match-btn').disabled = true;
-                document.getElementById('no-match-btn').disabled = true;
-                document.getElementById('repeat-btn').disabled = true;
+                if (!valid(sess, trialToken)) return;
 
+                if (matchBtn) matchBtn.disabled = true;
+                if (noMatchBtn) noMatchBtn.disabled = true;
+                if (repeatBtn) repeatBtn.disabled = true;
+
+                const responseChoice = response?.type === 'answer' ? response.choice : null;
+                const timeout = response?.type === 'timeout';
+                const omission = timeout || responseChoice === null;
                 const actualMatch = Boolean(planMatch && certificate);
-                let correct = false;
-                let omission = false;
+                let correct = null;
+                if (!timeout && responseChoice !== null) {
+                    correct = (responseChoice === 'match') === actualMatch;
+                }
 
-                if (response === null) {
-                    omission = true;
+                if (timeout) {
                     this.omissions += 1;
-                } else {
-                    correct = response === actualMatch;
+                } else if (correct !== null) {
+                    this.totalResponses += 1;
                     if (correct) {
                         this.score += 1;
                         this.correctResponses += 1;
                     }
-                    this.totalResponses += 1;
                     this.recentAccuracy.push(correct ? 1 : 0);
                     if (this.recentAccuracy.length > this.M) {
                         this.recentAccuracy.shift();
                     }
                 }
 
-                const rt = response === null ? null : Date.now() - this.responseStartTime;
+                const rt = (!timeout && responseChoice !== null) ? Date.now() - this.responseStartTime : null;
                 const feedbackEl = document.getElementById('feedback');
-                if (omission) {
-                    feedbackEl.textContent = 'Response window expired.';
-                    feedbackEl.className = 'feedback incorrect';
-                } else if (correct) {
-                    feedbackEl.textContent = 'Correct';
-                    feedbackEl.className = 'feedback correct';
-                } else {
-                    feedbackEl.textContent = 'Incorrect';
-                    feedbackEl.className = 'feedback incorrect';
+                if (feedbackEl) {
+                    if (timeout) {
+                        feedbackEl.textContent = 'Response window expired.';
+                        feedbackEl.className = 'feedback incorrect';
+                    } else if (correct) {
+                        feedbackEl.textContent = 'Correct';
+                        feedbackEl.className = 'feedback correct';
+                    } else if (correct === false) {
+                        feedbackEl.textContent = 'Incorrect';
+                        feedbackEl.className = 'feedback incorrect';
+                    } else {
+                        feedbackEl.textContent = '';
+                        feedbackEl.className = 'feedback';
+                    }
                 }
 
                 if (actualMatch && certificate) {
                     this.state.applyCooldown(Array.from(premise.getLetters()), currentIndex, this.n);
                 }
 
+                this.logTrial({
+                    planMatch,
+                    planType,
+                    certificate,
+                    featureSnapshot,
+                    premise,
+                    novelty,
+                    satResult,
+                    foilType,
+                    responsePayload: {
+                        choice: responseChoice,
+                        correct,
+                        rt,
+                        omission,
+                        timeout
+                    },
+                    modeUsed,
+                    trialIndex: currentIndex,
+                    passiveAdvance: false,
+                    trialTokenAtStart: trialToken,
+                    listenOnly: false
+                });
+
+                this.activePremise = null;
+                this.session.trialIndex = currentIndex + 1;
+                this.updateUI();
+            }
+
+            logTrial({ planMatch, planType, certificate, featureSnapshot, premise, novelty, satResult, foilType, responsePayload, modeUsed, trialIndex, passiveAdvance, trialTokenAtStart, listenOnly }) {
+                const { choice, correct, rt, omission, timeout } = responsePayload;
                 const featureLog = {
                     lettersSet: Array.from(featureSnapshot.lettersSet).sort(),
                     degreeVector: {},
@@ -4109,10 +4441,13 @@
                     featureLog.atomAxisProfile[axis] = count;
                 });
 
+                const plannerFlip = this.pendingPlannerFlip || (this.planner && typeof this.planner.wasFlipped === 'function' ? this.planner.wasFlipped(trialIndex) : false);
+                this.pendingPlannerFlip = false;
+
                 const logEntry = {
                     seedSession: this.seedManager.sessionSeed,
-                    trialIndex: currentIndex,
-                    trialNumber: currentIndex + 1,
+                    trialIndex,
+                    trialNumber: trialIndex + 1,
                     numTrials: this.session.numTrials,
                     n: this.n,
                     k: this.k,
@@ -4126,11 +4461,15 @@
                     certificate: certificate || null,
                     satStatus: satResult.ok,
                     midWindowDerivable: certificate ? certificate.midWindowDerivable : false,
-                    noveltyScores: novelty.noveltyScores,
-                    response: { choice: response, correct, rtMs: rt, omission },
-                    cooldownLetters: Array.from(this.state.getActiveCooldown(currentIndex + 1)),
-                    plannerFlip: plannerFlip || this.planner.wasFlipped(currentIndex),
+                    noveltyScores: novelty?.noveltyScores || {},
+                    response: { choice, correct, rtMs: rt, omission, timeout },
+                    cooldownLetters: Array.from(this.state.getActiveCooldown(trialIndex + 1)),
+                    plannerFlip,
                     modeUsed,
+                    mode: listenOnly ? AdvancePolicy.LISTEN : AdvancePolicy.ACTIVE,
+                    passiveAdvance,
+                    ttsFallback: Boolean(this.lastSpokenFallback),
+                    trialTokenAtStart,
                     features: featureLog
                 };
 
@@ -4140,6 +4479,7 @@
 
             updateDebugPanel(entry) {
                 const debug = document.getElementById('debug-content');
+                if (!debug) return;
                 const el = document.createElement('div');
                 el.className = 'debug-premise';
                 el.textContent = `Trial ${entry.trialIndex}: ${entry.atomsCanonical} | Plan=${entry.planType} | Response=${entry.response.choice}`;
@@ -4147,34 +4487,6 @@
                 while (debug.childElementCount > 20) {
                     debug.removeChild(debug.lastChild);
                 }
-            }
-
-            handleResponse(isMatch) {
-                if (!this.awaitingResponse || !this.responseResolver) return;
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                this.responseResolver(isMatch);
-                this.responseResolver = null;
-            }
-
-            async handleRepeat() {
-                if (!this.awaitingResponse) return;
-                if (this.responseTimer) {
-                    clearTimeout(this.responseTimer);
-                    this.responseTimer = null;
-                }
-                await this.voice.cancelAndWait();
-                await this.voice.speakPremise(this.currentPremises[this.session.trialIndex], this.sessionToken);
-                if (!this.awaitingResponse) return;
-                this.responseStartTime = Date.now();
-                this.responseTimer = setTimeout(() => {
-                    if (this.responseResolver) {
-                        this.responseResolver(null);
-                        this.responseResolver = null;
-                    }
-                }, this.secondsPerTrial * 1000);
             }
 
             exportData() {
@@ -4194,6 +4506,232 @@
             }
         }
 
+        const DEBOUNCE_MS = 250;
+        let lastBtn = 0;
+
+        function debounce() {
+            const now = performance.now();
+            if (now - lastBtn < DEBOUNCE_MS) return false;
+            lastBtn = now;
+            return true;
+        }
+
+        function cancelSpeechImmediately() {
+            try {
+                window.speechSynthesis?.cancel();
+            } catch (err) {
+                console.warn('speechSynthesis.cancel immediate failed', err);
+            }
+        }
+
+        function clearAllEngineTimers() {
+            Timer.cancelAll();
+            clearHeartbeat();
+        }
+
+        function stopSession() {
+            if (!session) return;
+            try {
+                session.abort.abort();
+            } catch (err) {
+                console.warn('abort stop failed', err);
+            }
+            clearAllEngineTimers();
+            cancelSpeechImmediately();
+            engine.finalizeSession(session, true);
+            window.__imagiActiveResponse = null;
+            window.forceCurrentTrialTimeout = null;
+            session = null;
+        }
+
+        async function runLoop(sess) {
+            const signal = sess.abort.signal;
+            while (!signal.aborted && sess.trialIndex < sess.numTrials) {
+                sess.trialToken += 1;
+                sess.phaseToken = 0;
+                await engine.executeTrial(sess, sess.trialToken, signal);
+                if (signal.aborted) break;
+                sess.trialIndex += 1;
+            }
+            if (!signal.aborted) {
+                await engine.finalizeSession(sess, false);
+                clearAllEngineTimers();
+                session = null;
+            }
+        }
+
+        function startSession() {
+            if (!debounce()) return;
+            stopSession();
+            session = newSession(engine);
+            engine.prepareSession(session);
+            wireHeartbeat(session);
+            runLoop(session).catch((err) => {
+                console.error('runLoop error', err);
+                stopSession();
+            });
+        }
+
+        function restartSession() {
+            if (!debounce()) return;
+            stopSession();
+            startSession();
+        }
+
+        function formatPremiseForSpeech(premise) {
+            if (!premise) return '';
+            return premise.atoms.map(atom => `${atom.head} is ${RELATION_WORDS[atom.axis]} ${atom.tail}`).join('; ') + '.';
+        }
+
+        function estimateUtteranceMs(text, rate = 0.9) {
+            const cps = 12 * rate;
+            return Math.max(900, Math.min(9000, Math.round((text.length / cps) * 1000) + 300));
+        }
+
+        async function speakPremiseSafe(sess, premise, trialToken, signal) {
+            if (!valid(sess, trialToken)) return { fallback: false };
+            cancelSpeechImmediately();
+            const text = formatPremiseForSpeech(premise);
+            window.currentPremiseText = text;
+            let settled = false;
+
+            return new Promise((resolve) => {
+                const onAbort = () => {
+                    if (settled) return;
+                    settled = true;
+                    resolve({ fallback: false });
+                };
+
+                signal.addEventListener('abort', onAbort, { once: true });
+
+                engine.voice.speak(text, engine.voice.sessionToken).then((meta) => {
+                    if (settled) return;
+                    settled = true;
+                    signal.removeEventListener('abort', onAbort);
+                    resolve(meta);
+                }).catch((err) => {
+                    console.warn('speakPremiseSafe fallback error', err);
+                    if (settled) return;
+                    settled = true;
+                    signal.removeEventListener('abort', onAbort);
+                    resolve({ fallback: true });
+                });
+            });
+        }
+
+        function secondsPerTrial() {
+            return engine.secondsPerTrial;
+        }
+
+        async function dwellSafe(seconds, trialToken, signal) {
+            return new Promise((resolve) => {
+                Timer.set('dwell', Math.max(0, Math.round(seconds * 1000)), trialToken, signal, resolve);
+            });
+        }
+
+        function bindTrialButtons(onMatch, onNo) {
+            const matchBtn = document.getElementById('match-btn');
+            const noMatchBtn = document.getElementById('no-match-btn');
+            matchBtn?.addEventListener('click', onMatch, { once: true });
+            noMatchBtn?.addEventListener('click', onNo, { once: true });
+        }
+
+        function unbindTrialButtons(onMatch, onNo) {
+            const matchBtn = document.getElementById('match-btn');
+            const noMatchBtn = document.getElementById('no-match-btn');
+            matchBtn?.removeEventListener('click', onMatch);
+            noMatchBtn?.removeEventListener('click', onNo);
+        }
+
+        async function collectResponseSafe(seconds, trialToken, signal) {
+            return new Promise((resolve) => {
+                let settled = false;
+                const settle = (payload) => {
+                    if (settled) return;
+                    settled = true;
+                    cleanup();
+                    resolve(payload);
+                };
+
+                const onMatch = () => settle({ type: 'answer', choice: 'match' });
+                const onNo = () => settle({ type: 'answer', choice: 'nomatch' });
+                bindTrialButtons(onMatch, onNo);
+                window.__imagiActiveResponse = (choice) => {
+                    if (choice === 'match') {
+                        onMatch();
+                    } else {
+                        onNo();
+                    }
+                };
+
+                const timerId = Timer.set('resp', Math.max(0, Math.round(seconds * 1000)), trialToken, signal, () => settle({ type: 'timeout' }));
+
+                const cleanup = () => {
+                    unbindTrialButtons(onMatch, onNo);
+                    Timer.clear(timerId);
+                    window.__imagiActiveResponse = null;
+                };
+
+                signal.addEventListener('abort', () => settle({ type: 'timeout' }), { once: true });
+                window.forceCurrentTrialTimeout = () => settle({ type: 'timeout' });
+            });
+        }
+
+        function wireHeartbeat(sess) {
+            clearHeartbeat();
+            let lastTick = performance.now();
+            let lastTrial = -1;
+            heartbeat = setInterval(() => {
+                if (!session || session.epoch !== sess.epoch) {
+                    clearHeartbeat();
+                    return;
+                }
+                if (sess.abort.signal.aborted) {
+                    clearHeartbeat();
+                    return;
+                }
+                const now = performance.now();
+                if (sess.trialIndex !== lastTrial) {
+                    lastTrial = sess.trialIndex;
+                    lastTick = now;
+                    return;
+                }
+                const typical = estimateUtteranceMs(window.currentPremiseText || 'H is east of R; Y is north of X.', 0.90) + (secondsPerTrial() * 1000) + 1500;
+                if (now - lastTick > typical) {
+                    console.warn('Watchdog nudge');
+                    cancelSpeechImmediately();
+                    if (session?.policy === AdvancePolicy.ACTIVE) {
+                        window.forceCurrentTrialTimeout?.();
+                    } else {
+                        Timer.set('dwell-nudge', 50, session.trialToken, session.abort.signal, () => {});
+                    }
+                    lastTick = now;
+                }
+            }, 500);
+        }
+
+        function onRepeatPressed() {
+            if (!session) return;
+            const premise = engine.activePremise || engine.currentPremises[Math.max(0, session.trialIndex - 1)];
+            if (!premise) return;
+            cancelSpeechImmediately();
+            setTimeout(() => {
+                if (!session || session.abort.signal.aborted) return;
+                speakPremiseSafe(session, premise, session.trialToken, session.abort.signal);
+            }, 120);
+        }
+
+        function shouldAutoStopForOmissions() {
+            return session?.policy === AdvancePolicy.ACTIVE;
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            try {
+                window.speechSynthesis?.resume();
+            } catch (err) {
+                console.warn('speechSynthesis.resume visibility failed', err);
+            }
+        });
         class InstructionsManager {
             constructor(engine) {
                 this.engine = engine;
@@ -4492,7 +5030,7 @@
                 if (!this.dialogOpen || !this.readAloud || this.pendingSpeechToken !== token) {
                     return;
                 }
-                await this.voice.speak(section.speech, this.engine.sessionToken);
+                await this.voice.speak(section.speech, this.voice.sessionToken);
             }
 
             cancelSpeech() {
@@ -4813,19 +5351,22 @@
             }
 
             async testInputGating() {
-                const engine = new GameEngine();
-                await engine.voice.initialize();
-                engine.totalTrials = 0;
-                engine.correctResponses = 0;
-                engine.totalResponses = 0;
-                engine.omissions = 3;
-                engine.awaitingResponse = false;
-                const before = engine.score;
-                engine.handleResponse(true);
+                const dummyEngine = new GameEngine();
+                await dummyEngine.voice.initialize();
+                const dummySession = {
+                    ...newSession(dummyEngine),
+                    abort: new AbortController(),
+                    trialToken: 1
+                };
+                session = dummySession;
+                const promise = collectResponseSafe(0.05, dummySession.trialToken, dummySession.abort.signal);
+                dummySession.abort.abort();
+                const result = await promise;
+                session = null;
                 return {
                     test: 'Input gating',
-                    passed: engine.score === before,
-                    details: 'No score change without active response window'
+                    passed: result.type === 'timeout',
+                    details: 'Abort resolves response promise as timeout'
                 };
             }
 
