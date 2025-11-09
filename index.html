@@ -4473,7 +4473,9 @@
             }
 
             selectVoice(voices) {
-                console.log('=== VOICE SELECTION STARTING ===');
+                console.log('═══════════════════════════════════════════════════════════════');
+                console.log('    ULTRA-COMPREHENSIVE FEMALE-ONLY WESTERN VOICE SELECTION');
+                console.log('═══════════════════════════════════════════════════════════════');
                 console.log(`Total voices available: ${voices.length}`);
 
                 // Log all available voices for debugging
@@ -4488,39 +4490,128 @@
                 console.log(`Platform detected: ${platform}`);
 
                 // ═══════════════════════════════════════════════════════════════
-                // COMPREHENSIVE MALE VOICE EXCLUSION LIST
+                // LAYER 1: WESTERN-ONLY LANGUAGE WHITELIST
+                // ═══════════════════════════════════════════════════════════════
+                const westernLanguageCodes = [
+                    'en-US', 'en-GB', 'en-AU', 'en-CA', 'en-NZ', 'en-IE', 'en-ZA',
+                    'en', // Generic English
+                    'fr-FR', 'fr-CA', 'fr-BE', 'fr-CH',
+                    'de-DE', 'de-AT', 'de-CH',
+                    'es-ES', 'es-MX', 'es-AR',
+                    'it-IT', 'it-CH',
+                    'pt-PT', 'pt-BR',
+                    'nl-NL', 'nl-BE',
+                    'sv-SE',
+                    'da-DK',
+                    'no-NO',
+                    'fi-FI',
+                    'pl-PL',
+                    'cs-CZ',
+                    'hu-HU',
+                    'ro-RO',
+                    'el-GR'
+                ];
+
+                // ═══════════════════════════════════════════════════════════════
+                // LAYER 2: NON-WESTERN LANGUAGE/ACCENT EXCLUSION (COMPLETE BLACKLIST)
+                // ═══════════════════════════════════════════════════════════════
+                const nonWesternLanguageCodes = [
+                    // INDIAN LANGUAGES (ALL INDIAN ACCENTS - CRITICAL EXCLUSION)
+                    'hi-IN', 'hi', 'ta-IN', 'ta', 'bn-IN', 'bn', 'te-IN', 'te',
+                    'mr-IN', 'mr', 'gu-IN', 'gu', 'kn-IN', 'kn', 'ml-IN', 'ml',
+                    'pa-IN', 'pa', 'or-IN', 'or', 'as-IN', 'as', 'ur-IN', 'ur',
+
+                    // CHINESE LANGUAGES
+                    'zh-CN', 'zh-TW', 'zh-HK', 'zh', 'cmn', 'yue', 'nan',
+
+                    // JAPANESE
+                    'ja-JP', 'ja',
+
+                    // KOREAN
+                    'ko-KR', 'ko',
+
+                    // ARABIC LANGUAGES
+                    'ar-SA', 'ar-EG', 'ar-AE', 'ar-DZ', 'ar', 'ar-MA', 'ar-TN',
+                    'ar-IQ', 'ar-JO', 'ar-LB', 'ar-KW', 'ar-OM', 'ar-QA',
+
+                    // RUSSIAN/SLAVIC (non-Western European)
+                    'ru-RU', 'ru', 'uk-UA', 'uk', 'be-BY', 'be',
+
+                    // THAI
+                    'th-TH', 'th',
+
+                    // VIETNAMESE
+                    'vi-VN', 'vi',
+
+                    // INDONESIAN/MALAY
+                    'id-ID', 'id', 'ms-MY', 'ms',
+
+                    // TURKISH
+                    'tr-TR', 'tr',
+
+                    // PERSIAN
+                    'fa-IR', 'fa',
+
+                    // HEBREW
+                    'he-IL', 'he', 'iw-IL', 'iw'
+                ];
+
+                // ═══════════════════════════════════════════════════════════════
+                // LAYER 3: EXHAUSTIVE MALE VOICE EXCLUSION LIST (100+ NAMES)
                 // ═══════════════════════════════════════════════════════════════
                 const maleVoiceNames = [
-                    // Common English male voices
+                    // ═══ COMMON ENGLISH MALE VOICES ═══
                     'Alex', 'Daniel', 'Fred', 'Tom', 'Thomas', 'Oliver', 'Ralph',
                     'Bruce', 'James', 'John', 'Nathan', 'Aaron', 'Jorge', 'Diego',
                     'Timothy', 'Mark', 'David', 'Richard', 'Chris', 'Christopher',
                     'Matthew', 'Paul', 'George', 'Kevin', 'Jason', 'Michael', 'Robert',
                     'William', 'Joseph', 'Charles', 'Steven', 'Edward', 'Brian',
+                    'Andrew', 'Anthony', 'Donald', 'Kenneth', 'Joshua', 'Brandon',
+                    'Justin', 'Ryan', 'Eric', 'Nicholas', 'Jacob', 'Jonathan',
+                    'Samuel', 'Benjamin', 'Patrick', 'Alexander', 'Jack', 'Henry',
+                    'Oscar', 'Adam', 'Ethan', 'Noah', 'Liam', 'Mason', 'Logan',
+                    'Lucas', 'Isaac', 'Nathan', 'Caleb', 'Christian', 'Hunter',
+                    'Jordan', 'Dylan', 'Brandon', 'Jose', 'Austin', 'Evan',
+                    'Sean', 'Tyler', 'Kyle', 'Ian', 'Carter', 'Xavier',
 
-                    // INDIAN MALE VOICES (EXPLICITLY EXCLUDED - RISHI)
-                    'Rishi',
+                    // ═══ INDIAN MALE VOICES (CRITICAL EXCLUSION - RISHI) ═══
+                    'Rishi', 'Prabhat', 'Hemant', 'Swara', 'Kalpana',
 
-                    // Microsoft male voices
+                    // ═══ MICROSOFT MALE VOICES ═══
                     'Microsoft David', 'Microsoft Mark', 'Microsoft Paul',
-                    'Microsoft George', 'Microsoft Rishi',
+                    'Microsoft George', 'Microsoft Rishi', 'Microsoft James',
+                    'Microsoft Sean', 'Microsoft Guy', 'Microsoft Michael',
 
-                    // Google male voices
+                    // ═══ GOOGLE MALE VOICES ═══
                     'Google UK English Male', 'Google US English Male',
                     'Google Hindi Male', 'Google Tamil Male', 'Google Bengali Male',
+                    'Google French Male', 'Google German Male', 'Google Spanish Male',
+                    'Google Italian Male', 'Google Portuguese Male',
 
-                    // Apple/iOS male voices
+                    // ═══ APPLE/iOS MALE VOICES (ALL VARIANTS) ═══
                     'Alex (Enhanced)', 'Fred (Enhanced)', 'Daniel (Compact)',
-                    'Oliver (Enhanced)', 'Ralph (Compact)',
+                    'Oliver (Enhanced)', 'Ralph (Compact)', 'Tom (Compact)',
+                    'Alex (Compact)', 'Fred (Compact)', 'Daniel (Enhanced)',
+                    'Oliver (Compact)', 'Ralph (Enhanced)', 'Thomas (Enhanced)',
 
-                    // Other platform male voices
+                    // ═══ NOVELTY/OTHER PLATFORM MALE VOICES ═══
                     'Albert', 'Bad News', 'Bahh', 'Bells', 'Boing', 'Bubbles',
                     'Cellos', 'Deranged', 'Good News', 'Hysterical', 'Junior',
-                    'Pipe Organ', 'Trinoids', 'Whisper', 'Wobble', 'Zarvox'
+                    'Pipe Organ', 'Trinoids', 'Whisper', 'Wobble', 'Zarvox',
+
+                    // ═══ ADDITIONAL PLATFORM-SPECIFIC MALE VOICES ═══
+                    'Eddy', 'Grandpa', 'Rocky', 'Shelley', 'Superstar',
+                    'Jacques', 'Henri', 'Antoine', 'Pierre', 'Marc',
+                    'Klaus', 'Yannick', 'Steffi', 'Hans', 'Markus',
+                    'Carlos', 'Juan', 'Luis', 'Miguel', 'Pablo',
+                    'Luca', 'Paolo', 'Marco', 'Giorgio', 'Matteo'
                 ];
 
-                // Comprehensive male voice patterns (regex-based detection)
+                // ═══════════════════════════════════════════════════════════════
+                // LAYER 4: EXHAUSTIVE MALE VOICE REGEX PATTERNS
+                // ═══════════════════════════════════════════════════════════════
                 const malePatterns = [
+                    // Common male names
                     /\balex\b/i, /\bdaniel\b/i, /\bfred\b/i, /\btom\b/i, /\bthomas\b/i,
                     /\boliver\b/i, /\bralph\b/i, /\bbruce\b/i, /\bjames\b/i, /\bjohn\b/i,
                     /\bnathan\b/i, /\baaron\b/i, /\bjorge\b/i, /\bdiego\b/i,
@@ -4528,48 +4619,85 @@
                     /\bchris\b/i, /\bchristopher\b/i, /\bmatthew\b/i, /\bpaul\b/i,
                     /\bgeorge\b/i, /\bkevin\b/i, /\bjason\b/i, /\bmichael\b/i,
                     /\brobert\b/i, /\bwilliam\b/i, /\bjoseph\b/i, /\bcharles\b/i,
-                    /\bsteven\b/i, /\bedward\b/i, /\bbrian\b/i,
+                    /\bsteven\b/i, /\bedward\b/i, /\bbrian\b/i, /\bandrew\b/i,
+                    /\banthony\b/i, /\bdonald\b/i, /\bkenneth\b/i, /\bjoshua\b/i,
+                    /\bjustin\b/i, /\bryan\b/i, /\beric\b/i, /\bjacob\b/i,
+                    /\bpatrick\b/i, /\balexander\b/i, /\bjack\b/i, /\bhenry\b/i,
+                    /\bethan\b/i, /\bnoah\b/i, /\bliam\b/i, /\bmason\b/i,
+                    /\btyler\b/i, /\bkyle\b/i, /\bdylan\b/i, /\badam\b/i,
+                    /\bsean\b/i, /\bcarlos\b/i, /\bjuan\b/i, /\bluis\b/i,
 
-                    // INDIAN MALE VOICES (CRITICAL EXCLUSION - RISHI)
-                    /\brishi\b/i,
+                    // INDIAN MALE VOICES (CRITICAL EXCLUSION - RISHI + ALL INDIAN NAMES)
+                    /\brishi\b/i, /\bprabhat\b/i, /\bhemant\b/i,
 
                     // Generic male indicators
                     /\bmale\b/i, /\bman\b/i, /\b\(m\)\b/i, /\bmale voice\b/i,
-                    /\bguy\b/i, /\bdude\b/i
+                    /\bguy\b/i, /\bdude\b/i, /\bboy\b/i, /\bmr\b/i
                 ];
 
                 // ═══════════════════════════════════════════════════════════════
-                // COMPREHENSIVE FEMALE VOICE INCLUSION LIST
+                // LAYER 5: INDIAN VOICE EXCLUSION (NAME-BASED)
+                // ═══════════════════════════════════════════════════════════════
+                const indianVoiceNames = [
+                    // ALL INDIAN VOICES (BOTH MALE AND FEMALE)
+                    'Rishi', 'Prabhat', 'Hemant', 'Swara', 'Kalpana',
+                    'Lekha', 'Raveena', 'Veena',
+                    'Aditi', 'Anjali', 'Divya', 'Kavya', 'Priya', 'Shreya'
+                ];
+
+                const indianVoicePatterns = [
+                    /\brishi\b/i, /\bprabhat\b/i, /\bhemant\b/i, /\bswara\b/i, /\bkalpana\b/i,
+                    /\blekha\b/i, /\braveena\b/i, /\bveena\b/i,
+                    /\baditi\b/i, /\banjali\b/i, /\bdivya\b/i, /\bkavya\b/i,
+                    /\bpriya\b/i, /\bshreya\b/i,
+                    /hindi/i, /tamil/i, /bengali/i, /telugu/i, /marathi/i, /gujarati/i,
+                    /indian/i, /india/i
+                ];
+
+                // ═══════════════════════════════════════════════════════════════
+                // LAYER 6: COMPREHENSIVE WESTERN FEMALE VOICE INCLUSION LIST (50+)
                 // ═══════════════════════════════════════════════════════════════
                 const femaleVoiceNames = [
-                    // Common English female voices
+                    // ═══ COMMON ENGLISH FEMALE VOICES ═══
                     'Samantha', 'Karen', 'Victoria', 'Susan', 'Zoe', 'Moira',
                     'Tessa', 'Fiona', 'Nicky', 'Serena', 'Hazel', 'Zira',
                     'Aria', 'Eva', 'Ava', 'Emma', 'Emily', 'Sarah', 'Kate',
                     'Anna', 'Lauren', 'Jessica', 'Jennifer', 'Michelle',
                     'Catherine', 'Elizabeth', 'Amanda', 'Rebecca', 'Nicole',
+                    'Stephanie', 'Melissa', 'Ashley', 'Heather', 'Rachel',
+                    'Amy', 'Laura', 'Angela', 'Kimberly', 'Lisa', 'Mary',
+                    'Sandra', 'Nancy', 'Betty', 'Dorothy', 'Helen', 'Deborah',
+                    'Donna', 'Carol', 'Ruth', 'Sharon', 'Cynthia',
 
-                    // Indian female voices
-                    'Lekha', 'Raveena', 'Veena',
-
-                    // Microsoft female voices
+                    // ═══ MICROSOFT WESTERN FEMALE VOICES ═══
                     'Microsoft Zira', 'Microsoft Hazel', 'Microsoft Susan',
                     'Microsoft Zira Desktop', 'Microsoft Zira - English (United States)',
+                    'Microsoft Linda', 'Microsoft Heather', 'Microsoft Laura',
 
-                    // Google female voices
+                    // ═══ GOOGLE WESTERN FEMALE VOICES ═══
                     'Google UK English Female', 'Google US English Female',
-                    'Google Hindi Female', 'Google Tamil Female', 'Google Bengali Female',
+                    'Google Australian Female', 'Google French Female',
+                    'Google German Female', 'Google Spanish Female',
+                    'Google Italian Female', 'Google Portuguese Female',
 
-                    // Apple/iOS female voices (including enhanced variants)
+                    // ═══ APPLE/iOS FEMALE VOICES (ALL VARIANTS) ═══
                     'Samantha (Enhanced)', 'Karen (Enhanced)', 'Moira (Enhanced)',
                     'Tessa (Enhanced)', 'Victoria (Enhanced)', 'Fiona (Enhanced)',
                     'Samantha (Compact)', 'Karen (Compact)', 'Moira (Compact)',
+                    'Tessa (Compact)', 'Victoria (Compact)', 'Fiona (Compact)',
 
-                    // Siri variants
-                    'Siri Female', 'Siri Female (Enhanced)'
+                    // ═══ SIRI VARIANTS ═══
+                    'Siri Female', 'Siri Female (Enhanced)', 'Siri Female (Compact)',
+
+                    // ═══ EUROPEAN FEMALE VOICES ═══
+                    'Amelie', 'Audrey', 'Aurelie', 'Celine', 'Chantal',
+                    'Marie', 'Sophie', 'Yelda', 'Zofia', 'Petra', 'Vicki',
+                    'Katja', 'Sabina', 'Carmit', 'Kyoko', 'Luciana', 'Joana'
                 ];
 
-                // Female voice patterns (regex-based detection)
+                // ═══════════════════════════════════════════════════════════════
+                // LAYER 7: WESTERN FEMALE VOICE REGEX PATTERNS
+                // ═══════════════════════════════════════════════════════════════
                 const femalePatterns = [
                     /\bsamantha\b/i, /\bkaren\b/i, /\bvictoria\b/i, /\bsusan\b/i,
                     /\bzoe\b/i, /\bmoira\b/i, /\btessa\b/i, /\bfiona\b/i,
@@ -4578,59 +4706,171 @@
                     /\bemily\b/i, /\bsarah\b/i, /\bkate\b/i, /\banna\b/i,
                     /\blauren\b/i, /\bjessica\b/i, /\bjennifer\b/i, /\bmichelle\b/i,
                     /\bcatherine\b/i, /\belizabeth\b/i, /\bamanda\b/i,
-                    /\brebecca\b/i, /\bnicole\b/i,
-
-                    // Indian female voices
-                    /\blekha\b/i, /\braveena\b/i, /\bveena\b/i,
+                    /\brebecca\b/i, /\bnicole\b/i, /\bstephanie\b/i, /\bmelissa\b/i,
+                    /\bashley\b/i, /\bheather\b/i, /\brachel\b/i, /\bamy\b/i,
+                    /\blaura\b/i, /\bangela\b/i, /\blisa\b/i, /\bmary\b/i,
+                    /\bamelie\b/i, /\baudrey\b/i, /\bceline\b/i, /\bmarie\b/i,
+                    /\bsophie\b/i, /\bpietra\b/i, /\bvicki\b/i, /\bkatja\b/i,
 
                     // Generic female indicators
                     /\bfemale\b/i, /\bwoman\b/i, /\b\(f\)\b/i, /\bfemale voice\b/i,
-                    /\bsiri.*female\b/i, /\blady\b/i, /\bgirl\b/i
+                    /\bsiri.*female\b/i, /\blady\b/i, /\bgirl\b/i, /\bms\b/i, /\bmiss\b/i,
+                    /\bmrs\b/i
                 ];
 
                 // ═══════════════════════════════════════════════════════════════
-                // STEP 1: PRE-FILTER - REMOVE ALL MALE VOICES (INCLUDING RISHI)
+                // MULTI-LAYER FILTERING PIPELINE
                 // ═══════════════════════════════════════════════════════════════
-                console.log('STEP 1: Filtering out ALL male voices (including Rishi)...');
 
-                const femaleOnlyVoices = voices.filter(voice => {
+                console.log('\n┌─────────────────────────────────────────────────────────┐');
+                console.log('│  LAYER 1: FILTERING BY WESTERN LANGUAGE CODES          │');
+                console.log('└─────────────────────────────────────────────────────────┘');
+
+                const westernVoices = voices.filter(voice => {
+                    const lang = voice.lang;
+
+                    // Check if language is in Western whitelist
+                    const isWesternLanguage = westernLanguageCodes.some(westCode =>
+                        lang && lang.startsWith(westCode)
+                    );
+
+                    // Check if language is in non-Western blacklist
+                    const isNonWesternLanguage = nonWesternLanguageCodes.some(nonWestCode =>
+                        lang && lang.startsWith(nonWestCode)
+                    );
+
+                    if (isNonWesternLanguage) {
+                        console.log(`  ✗✗✗ EXCLUDED (NON-WESTERN ACCENT): ${voice.name} (${lang})`);
+                        return false;
+                    }
+
+                    if (!isWesternLanguage) {
+                        console.log(`  ✗✗✗ EXCLUDED (UNKNOWN LANGUAGE): ${voice.name} (${lang})`);
+                        return false;
+                    }
+
+                    console.log(`  ✓ Kept (WESTERN): ${voice.name} (${lang})`);
+                    return true;
+                });
+
+                console.log(`After Western language filtering: ${westernVoices.length} voices remain (${voices.length - westernVoices.length} non-Western EXCLUDED)\n`);
+
+                if (westernVoices.length === 0) {
+                    console.error('✗✗✗ CRITICAL FAILURE: No Western language voices available!');
+                    this.voice = null;
+                    this.showVoiceWarning('ERROR: Only non-Western voices available!');
+                    return;
+                }
+
+                console.log('┌─────────────────────────────────────────────────────────┐');
+                console.log('│  LAYER 2: REMOVING ALL INDIAN VOICES (CRITICAL)        │');
+                console.log('└─────────────────────────────────────────────────────────┘');
+
+                const nonIndianVoices = westernVoices.filter(voice => {
+                    const voiceName = voice.name;
+                    const lang = voice.lang;
+
+                    // Check by name
+                    const isIndianName = indianVoiceNames.some(indianName =>
+                        voiceName.toLowerCase().includes(indianName.toLowerCase())
+                    );
+
+                    // Check by pattern
+                    const isIndianPattern = indianVoicePatterns.some(pattern =>
+                        pattern.test(voiceName) || pattern.test(lang)
+                    );
+
+                    if (isIndianName || isIndianPattern) {
+                        console.log(`  ✗✗✗ EXCLUDED (INDIAN VOICE): ${voiceName} (${lang})`);
+                        return false;
+                    }
+
+                    return true;
+                });
+
+                console.log(`After Indian voice filtering: ${nonIndianVoices.length} voices remain (${westernVoices.length - nonIndianVoices.length} Indian voices EXCLUDED)\n`);
+
+                if (nonIndianVoices.length === 0) {
+                    console.error('✗✗✗ CRITICAL FAILURE: Only Indian voices in Western language pool!');
+                    this.voice = null;
+                    this.showVoiceWarning('ERROR: Only Indian voices available!');
+                    return;
+                }
+
+                console.log('┌─────────────────────────────────────────────────────────┐');
+                console.log('│  LAYER 3: REMOVING ALL MALE VOICES                     │');
+                console.log('└─────────────────────────────────────────────────────────┘');
+
+                const nonMaleVoices = nonIndianVoices.filter(voice => {
                     const voiceName = voice.name;
 
-                    // Check if voice matches any male name (exact or partial match)
-                    const matchesMaleName = maleVoiceNames.some(maleName =>
+                    // Check by male name
+                    const isMaleName = maleVoiceNames.some(maleName =>
                         voiceName.toLowerCase() === maleName.toLowerCase() ||
                         voiceName.toLowerCase().includes(maleName.toLowerCase())
                     );
 
-                    // Check if voice matches any male pattern
-                    const matchesMalePattern = malePatterns.some(pattern =>
+                    // Check by male pattern
+                    const isMalePattern = malePatterns.some(pattern =>
                         pattern.test(voiceName)
                     );
 
-                    if (matchesMaleName || matchesMalePattern) {
-                        console.log(`  ✗✗✗ EXCLUDED (MALE): ${voiceName}`);
-                        return false; // EXCLUDE this voice completely
+                    if (isMaleName || isMalePattern) {
+                        console.log(`  ✗✗✗ EXCLUDED (MALE VOICE): ${voiceName}`);
+                        return false;
                     }
 
-                    // Voice is not male, keep it for further evaluation
-                    console.log(`  ✓ Kept for evaluation: ${voiceName}`);
+                    console.log(`  ✓ Kept (NON-MALE): ${voiceName}`);
                     return true;
                 });
 
-                console.log(`After male voice filtering: ${femaleOnlyVoices.length} voices remain (${voices.length - femaleOnlyVoices.length} males EXCLUDED)`);
+                console.log(`After male voice filtering: ${nonMaleVoices.length} voices remain (${nonIndianVoices.length - nonMaleVoices.length} male voices EXCLUDED)\n`);
 
-                // Critical check: If no voices remain after male filtering, FAIL
-                if (femaleOnlyVoices.length === 0) {
-                    console.error('✗✗✗ CRITICAL FAILURE: All available voices are male!');
-                    console.error('No female voices exist on this device.');
+                if (nonMaleVoices.length === 0) {
+                    console.error('✗✗✗ CRITICAL FAILURE: All Western non-Indian voices are male!');
                     this.voice = null;
-                    this.showVoiceWarning('ERROR: Only male voices available. No female voice found!');
-                    console.log('=== VOICE SELECTION FAILED (All Male) ===');
+                    this.showVoiceWarning('ERROR: Only male voices available!');
                     return;
                 }
 
+                console.log('┌─────────────────────────────────────────────────────────┐');
+                console.log('│  LAYER 4: CONFIRMING WESTERN FEMALE VOICES             │');
+                console.log('└─────────────────────────────────────────────────────────┘');
+
+                const confirmedWesternFemaleVoices = nonMaleVoices.filter(voice => {
+                    const voiceName = voice.name;
+
+                    // Check by female name
+                    const isFemaleName = femaleVoiceNames.some(femaleName =>
+                        voiceName.toLowerCase().includes(femaleName.toLowerCase())
+                    );
+
+                    // Check by female pattern
+                    const isFemalePattern = femalePatterns.some(pattern =>
+                        pattern.test(voiceName)
+                    );
+
+                    if (isFemaleName || isFemalePattern) {
+                        console.log(`  ✓✓✓ CONFIRMED (WESTERN FEMALE): ${voiceName}`);
+                        return true;
+                    }
+
+                    console.log(`  ? AMBIGUOUS (uncertain gender): ${voiceName}`);
+                    return false;
+                });
+
+                console.log(`Confirmed Western female voices: ${confirmedWesternFemaleVoices.length}\n`);
+
+                // Use confirmed female voices or fall back to non-male voices
+                const finalVoicePool = confirmedWesternFemaleVoices.length > 0
+                    ? confirmedWesternFemaleVoices
+                    : nonMaleVoices;
+
+                console.log(`FINAL VOICE POOL SIZE: ${finalVoicePool.length} voices`);
+                console.log(`  (${voices.length} original → ${finalVoicePool.length} after all filters)\n`);
+
                 // ═══════════════════════════════════════════════════════════════
-                // STEP 2: PLATFORM-SPECIFIC PRIORITY LISTS (FEMALE ONLY)
+                // TIER 1: PLATFORM-SPECIFIC PRIORITY LISTS (WESTERN FEMALE ONLY)
                 // ═══════════════════════════════════════════════════════════════
                 const iOSFemalePriority = [
                     'Samantha',
@@ -4648,7 +4888,8 @@
                     'Nicky',
                     'Serena',
                     'Siri Female',
-                    'Siri Female (Enhanced)'
+                    'Siri Female (Enhanced)',
+                    'Siri Female (Compact)'
                 ];
 
                 const desktopFemalePriority = [
@@ -4662,88 +4903,64 @@
                     'Microsoft Zira',
                     'Microsoft Zira Desktop',
                     'Microsoft Hazel',
+                    'Microsoft Susan',
                     'Google US English Female',
-                    'Google UK English Female'
+                    'Google UK English Female',
+                    'Google Australian Female'
                 ];
 
                 const priorityList = isIOS ? iOSFemalePriority : desktopFemalePriority;
 
-                // ═══════════════════════════════════════════════════════════════
-                // STEP 3: TIER 1 - Try priority list (exact name matching)
-                // ═══════════════════════════════════════════════════════════════
-                console.log('STEP 3 - TIER 1: Searching female priority list...');
+                console.log('┌─────────────────────────────────────────────────────────┐');
+                console.log('│  TIER 1: PRIORITY LIST MATCHING                       │');
+                console.log('└─────────────────────────────────────────────────────────┘');
+
                 for (const priorityName of priorityList) {
                     console.log(`  Trying priority voice: ${priorityName}`);
-                    const match = femaleOnlyVoices.find(v => v.name === priorityName);
+                    const match = finalVoicePool.find(v => v.name === priorityName);
                     if (match) {
-                        console.log(`  ✓✓✓ FEMALE PRIORITY VOICE FOUND: ${match.name} (${match.lang})`);
+                        console.log(`  ✓✓✓ WESTERN FEMALE PRIORITY VOICE FOUND: ${match.name} (${match.lang})`);
                         this.voice = match;
                         this.persistVoice(match, isIOS);
-                        console.log('=== VOICE SELECTION COMPLETE (Female Priority Match) ===');
+                        console.log('\n═══════════════════════════════════════════════════════════════');
+                        console.log('   VOICE SELECTION COMPLETE (Western Female Priority Match)');
+                        console.log('═══════════════════════════════════════════════════════════════\n');
                         return;
                     }
                 }
-                console.log('  No priority matches found in female-only voices');
+                console.log('  No priority matches found');
 
                 // ═══════════════════════════════════════════════════════════════
-                // STEP 4: TIER 2 - Heuristic female pattern matching
+                // TIER 2: USE FIRST VOICE FROM FILTERED POOL
                 // ═══════════════════════════════════════════════════════════════
-                console.log('STEP 4 - TIER 2: Applying female pattern heuristics...');
+                console.log('\n┌─────────────────────────────────────────────────────────┐');
+                console.log('│  TIER 2: SELECTING FIRST WESTERN FEMALE VOICE          │');
+                console.log('└─────────────────────────────────────────────────────────┘');
 
-                const confirmedFemaleCandidates = femaleOnlyVoices.filter(v => {
-                    const voiceName = v.name;
-
-                    // Check if voice matches any female name
-                    const matchesFemaleName = femaleVoiceNames.some(femaleName =>
-                        voiceName.toLowerCase().includes(femaleName.toLowerCase())
-                    );
-
-                    // Check if voice matches any female pattern
-                    const matchesFemalePattern = femalePatterns.some(pattern =>
-                        pattern.test(voiceName)
-                    );
-
-                    if (matchesFemaleName || matchesFemalePattern) {
-                        console.log(`  ✓✓ CONFIRMED FEMALE: ${voiceName} (pattern match)`);
-                        return true;
-                    }
-
-                    return false;
-                });
-
-                if (confirmedFemaleCandidates.length > 0) {
-                    console.log(`  Found ${confirmedFemaleCandidates.length} confirmed female voices via heuristics`);
-                    this.voice = confirmedFemaleCandidates[0];
+                if (finalVoicePool.length > 0) {
+                    this.voice = finalVoicePool[0];
                     console.log(`  ✓✓✓ SELECTED: ${this.voice.name} (${this.voice.lang})`);
                     this.persistVoice(this.voice, isIOS);
-                    console.log('=== VOICE SELECTION COMPLETE (Female Heuristic Match) ===');
-                    return;
-                }
-                console.log('  No confirmed female voices found via heuristics');
-
-                // ═══════════════════════════════════════════════════════════════
-                // STEP 5: TIER 3 - Use first non-male voice (last resort)
-                // ═══════════════════════════════════════════════════════════════
-                console.log('STEP 5 - TIER 3: Attempting last resort (first non-male voice)...');
-
-                if (femaleOnlyVoices.length > 0) {
-                    console.warn(`⚠ WARNING: Using unconfirmed voice as last resort: ${femaleOnlyVoices[0].name}`);
-                    console.warn('This voice passed male filtering but could not be confirmed as female');
-                    this.voice = femaleOnlyVoices[0];
-                    this.persistVoice(this.voice, isIOS);
-                    console.log('=== VOICE SELECTION COMPLETE (Last Resort) ===');
-                    this.showVoiceWarning('Could not confirm female voice. Using best available option.');
+                    console.log('\n═══════════════════════════════════════════════════════════════');
+                    console.log('   VOICE SELECTION COMPLETE (Western Female Voice)');
+                    console.log('═══════════════════════════════════════════════════════════════\n');
                     return;
                 }
 
                 // ═══════════════════════════════════════════════════════════════
-                // STEP 6: CRITICAL FAILURE - No suitable voices
+                // CRITICAL FAILURE - No suitable voices exist
                 // ═══════════════════════════════════════════════════════════════
-                console.error('✗✗✗ CRITICAL FAILURE: No female voices available!');
-                console.error('All voices were either male or could not be classified');
+                console.error('\n✗✗✗ CRITICAL FAILURE ✗✗✗');
+                console.error('No Western female voices available after all filtering!');
+                console.error('All voices were excluded by one or more filters:');
+                console.error('  - Non-Western accent filter');
+                console.error('  - Indian voice filter');
+                console.error('  - Male voice filter');
                 this.voice = null;
-                this.showVoiceWarning('ERROR: No suitable female voice available on this device!');
-                console.log('=== VOICE SELECTION FAILED ===');
+                this.showVoiceWarning('ERROR: No suitable Western female voice available on this device!');
+                console.log('\n═══════════════════════════════════════════════════════════════');
+                console.log('   VOICE SELECTION FAILED');
+                console.log('═══════════════════════════════════════════════════════════════\n');
             }
 
             // Helper method to persist voice selection with platform awareness
