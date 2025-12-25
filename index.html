@@ -1,1 +1,20 @@
-...
+            }
+
+            this.history.push(this.currentCycleObj);
+            setTimeout(() => { fb.textContent = ""; this.pulse(); }, 1000);
+        }
+
+        updateUI() {
+            document.getElementById('trial-count').textContent = this.total;
+            document.getElementById('score').textContent = this.score;
+            document.getElementById('accuracy').textContent = 
+                this.total > 1 ? Math.round((this.score / (this.total - 1)) * 100) + "%" : "0%";
+            document.getElementById('status').textContent = `CYCLE_${this.total}_ACTIVE`;
+        }
+    }
+
+    const engine = new DaVinciEngine();
+    engine.init();
+</script>
+</body>
+</html>
