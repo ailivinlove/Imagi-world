@@ -309,7 +309,12 @@ button:disabled {
 
   <div class="control-group">
     <label>Thinking Time: <span id="spt-val" style="color:#ffd700">8</span>s</label>
-    <input type="range" id="spt-slider" min="3" max="300" step="1" value="8">
+    <input type="range" id="spt-slider" min="1" max="300" step="1" value="8">
+  </div>
+
+  <div class="control-group">
+    <label>Speech Rate: <span id="rate-val" style="color:#ffd700">0.85</span>x</label>
+    <input type="range" id="rate-slider" min="0.5" max="2.0" step="0.05" value="0.85">
   </div>
 
   <div class="button-group">
@@ -406,6 +411,9 @@ class DaVinciEngine {
     document.getElementById('spt-slider').oninput = (e) => {
       document.getElementById('spt-val').textContent = e.target.value;
     };
+    document.getElementById('rate-slider').oninput = (e) => {
+      document.getElementById('rate-val').textContent = parseFloat(e.target.value).toFixed(2);
+    };
     document.getElementById('match-btn').onclick = () => this.respond(true);
     document.getElementById('no-match-btn').onclick = () => this.respond(false);
 
@@ -496,7 +504,7 @@ class DaVinciEngine {
       this.synth.cancel();
 
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.85;
+      utterance.rate = parseFloat(document.getElementById('rate-slider').value);
       utterance.pitch = 1.0;
 
       let resolved = false;
